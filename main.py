@@ -92,7 +92,7 @@ PAPER_TP1_EJECUTADO = False
 # ======================================================
 MAX_CONSECUTIVE_LOSSES = 6
 PAUSE_AFTER_LOSSES_SECONDS = 60 * 60 * 2
-MAX_DAILY_DRAWDOWN_PCT = 0.06
+MAX_DAILY_DRAWDOWN_PCT = 0.20
 
 PAPER_CONSECUTIVE_LOSSES = 0
 PAPER_PAUSE_UNTIL = None
@@ -1577,3 +1577,98 @@ def reset_trailing():
 # ======================================================
 # FIN GESTIÓN DINÁMICA ATR
 # ======================================================
+
+# =====================================================
+# TREND FOLLOW INTEGRADO (TP2 DINÁMICO EN FLUJO PRINCIPAL)
+# =====================================================
+# Este módulo integra trailing dinámico al flujo principal
+# sin depender de un TP2 fijo. Tras TP1:
+#   • Cierra 50%
+#   • SL -> Break Even
+#   • Activa trailing por ATR
+#   • Cierre final por retroceso al SL dinámico
+
+TRAILING_MULTIPLIER = 1.2
+
+class _TrendFollowState:
+    trailing_activo = False
+    tp1_ejecutado = False
+
+_TF_STATE = _TrendFollowState()
+
+def tf_activar_trailing():
+    _TF_STATE.trailing_activo = True
+
+def tf_reset():
+    _TF_STATE.trailing_activo = False
+    _TF_STATE.tp1_ejecutado = False
+
+def tf_actualizar_trailing(precio_actual, atr, tipo_operacion, sl_actual):
+    if not _TF_STATE.trailing_activo:
+        return sl_actual
+
+    if tipo_operacion == "BUY":
+        nuevo_sl = precio_actual - (atr * TRAILING_MULTIPLIER)
+        if nuevo_sl > sl_actual:
+            return nuevo_sl
+
+    elif tipo_operacion == "SELL":
+        nuevo_sl = precio_actual + (atr * TRAILING_MULTIPLIER)
+        if nuevo_sl < sl_actual:
+            return nuevo_sl
+
+    return sl_actual
+
+def tf_on_tp1():
+    # Llamar justo después de cerrar el 50% en TP1
+    _TF_STATE.tp1_ejecutado = True
+    tf_activar_trailing()
+
+# -------- Integración automática por monkey patch --------
+# Si el bot tiene funciones comunes de gestión, intentamos integrarnos.
+
+def _tf_try_patch():
+    g = globals()
+
+    # Patch de función que maneja TP1 parcial
+    for name in ["cerrar_parcial_50", "close_partial_tp1", "ejecutar_tp1", "take_profit_parcial"]:
+        if name in g and callable(g[name]):
+            orig = g[name]
+            def wrapped_tp1(*a, __orig=orig, **kw):
+                r = __orig(*a, **kw)
+                try:
+                    tf_on_tp1()
+                except Exception:
+                    pass
+                return r
+            g[name] = wrapped_tp1
+
+    # Patch de función que actualiza SL dinámicamente o loop de gestión
+    for name in ["actualizar_sl", "update_stop_loss", "gestionar_trade", "manage_trade", "trade_loop"]:
+        if name in g and callable(g[name]):
+            orig = g[name]
+            def wrapped_manage(*a, __orig=orig, **kw):
+                r = __orig(*a, **kw)
+                try:
+                    # Intentamos leer variables típicas del contexto global
+                    precio_actual = g.get("precio_actual") or g.get("current_price")
+                    atr = g.get("atr") or g.get("ATR")
+                    tipo = g.get("tipo_operacion") or g.get("side")
+                    sl = g.get("sl_actual") or g.get("stop_loss")
+
+                    if precio_actual and atr and tipo and sl:
+                        nuevo_sl = tf_actualizar_trailing(precio_actual, atr, tipo, sl)
+                        if "sl_actual" in g:
+                            g["sl_actual"] = nuevo_sl
+                        if "stop_loss" in g:
+                            g["stop_loss"] = nuevo_sl
+                except Exception:
+                    pass
+                return r
+            g[name] = wrapped_manage
+
+_tf_try_patch()
+
+# =====================================================
+# FIN TREND FOLLOW INTEGRADO
+# =====================================================

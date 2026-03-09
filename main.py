@@ -1,12 +1,13 @@
-# BOT TRADING V90.5 BYBIT REAL – PRODUCCIÓN (SIN PROXY) + ARSENAL NISON COMPLETO
+# BOT TRADING V90.6 BYBIT REAL – PRODUCCIÓN (SIN PROXY) + NISON + TRAILING DINÁMICO
 # ======================================================
 # ⚠️ KEYS INCLUIDAS TAL CUAL (SEGÚN PEDIDO)
 # Diseñado para FUTUROS PERPETUOS BTCUSDT en Bybit
 # ======================================================
-# NOVEDADES V90.5:
-# - Agregados patrones de 3 velas: Morning Star y Evening Star.
-# - Agregados patrones de precisión: Tweezer Tops y Bottoms.
-# - Mantenimiento de contexto estricto para los 10 patrones.
+# NOVEDADES V90.6:
+# - Integración 100% nativa de Trailing Stop Dinámico (TP2 Infinito).
+# - Corrección de error de variable "None" en TP2.
+# - Limpieza de módulos inactivos/experimentales al final del script.
+# - Mantenimiento de contexto estricto para los 10 patrones Nison.
 # ======================================================
 
 import os
@@ -59,7 +60,7 @@ SLEEP_SECONDS = 60  # 1 minuto
 PAPER_BALANCE_INICIAL = 100.0
 PAPER_BALANCE = PAPER_BALANCE_INICIAL
 PAPER_PNL_GLOBAL = 0.0
-PAPER_TRADES = []
+PAPER_TRADES =[]
 PAPER_POSICION_ACTIVA = None
 PAPER_PRECIO_ENTRADA = None
 PAPER_DECISION_ACTIVA = None
@@ -297,7 +298,7 @@ def motor_v90(df):
     precio = df['close'].iloc[-1]
     atr = df['atr'].iloc[-1]
 
-    razones = []
+    razones =[]
 
     if tendencia == '📈 ALCISTA' and cerca_de_nivel(precio, soporte) < atr:
         razones.append('Confluencia: soporte + tendencia alcista')
@@ -413,8 +414,6 @@ def es_dark_cloud_nison(df, idx):
     return (curr['close'] < midpoint_prev) and (curr['open'] >= prev['close'])
 
 # --- 7. MORNING STAR (ESTRELLA DE LA MAÑANA) - 3 VELAS ---
-# Contexto: Bajista.
-# 1: Roja larga. 2: Pequeña (indecisión). 3: Verde fuerte que penetra en la 1.
 def es_morning_star_nison(df, idx):
     if idx < 2: return False
     c1 = df.iloc[idx-2] # Roja
@@ -443,8 +442,6 @@ def es_morning_star_nison(df, idx):
     return True
 
 # --- 8. EVENING STAR (ESTRELLA DEL ATARDECER) - 3 VELAS ---
-# Contexto: Alcista.
-# 1: Verde larga. 2: Pequeña (estrella). 3: Roja fuerte que penetra en la 1.
 def es_evening_star_nison(df, idx):
     if idx < 2: return False
     c1 = df.iloc[idx-2] # Verde
@@ -468,14 +465,12 @@ def es_evening_star_nison(df, idx):
     return True
 
 # --- 9. TWEEZER BOTTOMS (PINZAS DE SUELO) ---
-# Contexto: Bajista. Dos velas con el mismo mínimo (o muy cerca).
 def es_tweezer_bottom_nison(df, idx):
     curr = df.iloc[idx]
     prev = df.iloc[idx-1]
     
     # Margen de tolerancia para "mismo precio"
     tolerancia = df['atr'].iloc[idx] * 0.05
-    
     match_low = abs(curr['low'] - prev['low']) < tolerancia
     
     # Confirmación: la vela actual debe cerrar alcista o rechazar fuerte
@@ -484,13 +479,11 @@ def es_tweezer_bottom_nison(df, idx):
     return match_low and rechazo
 
 # --- 10. TWEEZER TOPS (PINZAS DE TECHO) ---
-# Contexto: Alcista. Dos velas con el mismo máximo.
 def es_tweezer_top_nison(df, idx):
     curr = df.iloc[idx]
     prev = df.iloc[idx-1]
     
     tolerancia = df['atr'].iloc[idx] * 0.05
-    
     match_high = abs(curr['high'] - prev['high']) < tolerancia
     
     rechazo = (curr['close'] < curr['open']) or (es_shooting_star_nison(df, idx))
@@ -568,15 +561,6 @@ def filtro_maestro_nison(
 # ======================================================
 
 def generar_grafico_entrada(df, decision, soporte, resistencia, slope, intercept, razones):
-    """
-    Genera gráfico de velas japonesas con:
-    - Soporte (línea horizontal)
-    - Resistencia (línea horizontal)
-    - Línea de tendencia inclinada (según slope)
-    - EMA20 (opcional)
-    - Marcador exacto en la vela de entrada
-    """
-
     try:
         df_plot = df.copy().tail(GRAFICO_VELAS_LIMIT)
 
@@ -586,82 +570,67 @@ def generar_grafico_entrada(df, decision, soporte, resistencia, slope, intercept
         # ======================================================
         # DATOS
         # ======================================================
-
         times = df_plot.index
         opens = df_plot['open'].values
         highs = df_plot['high'].values
         lows = df_plot['low'].values
         closes = df_plot['close'].values
-
         x = np.arange(len(df_plot))
 
         # ======================================================
         # CREAR FIGURA
         # ======================================================
-
         fig, ax = plt.subplots(figsize=(14, 7))
 
         # ======================================================
         # VELAS JAPONESAS (MATPLOTLIB PURO)
         # ======================================================
-
         for i in range(len(df_plot)):
             color = 'green' if closes[i] >= opens[i] else 'red'
-
             # Mecha
             ax.vlines(x[i], lows[i], highs[i], color=color, linewidth=1)
-
             # Cuerpo
             cuerpo_y = min(opens[i], closes[i])
             cuerpo_h = abs(closes[i] - opens[i])
-
             if cuerpo_h == 0:
                 cuerpo_h = 0.0001
-
-            rect = plt.Rectangle(
-                (x[i] - 0.3, cuerpo_y),
-                0.6,
-                cuerpo_h,
-                color=color,
-                alpha=0.9
-            )
+            rect = plt.Rectangle((x[i] - 0.3, cuerpo_y), 0.6, cuerpo_h, color=color, alpha=0.9)
             ax.add_patch(rect)
 
         # ======================================================
         # SOPORTE / RESISTENCIA (LÍNEAS HORIZONTALES)
         # ======================================================
-
         ax.axhline(soporte, color='cyan', linestyle='--', linewidth=2, label=f"Soporte {soporte:.2f}")
         ax.axhline(resistencia, color='magenta', linestyle='--', linewidth=2, label=f"Resistencia {resistencia:.2f}")
 
         # ======================================================
         # EMA20
         # ======================================================
-
         if MOSTRAR_EMA20 and 'ema20' in df_plot.columns:
             ax.plot(x, df_plot['ema20'].values, color='yellow', linewidth=2, label='EMA20')
 
         # ======================================================
-        # LÍNEA DE TENDENCIA INCLINADA (REGRESIÓN LINEAL)
+        # LÍNEA DE TENDENCIA INCLINADA Y CANAL (REGRESIÓN LINEAL)
         # ======================================================
-
-        # Creamos tendencia solo sobre el rango graficado
-        tendencia_y = intercept + slope * np.arange(len(df))
-
-        # Ajustar para que coincida con el rango mostrado
-        # intercept original es para el dataset completo, así que recalculamos sobre df_plot
         y_plot = df_plot['close'].values
         x_plot = np.arange(len(y_plot))
         slope_plot, intercept_plot, r_plot, _, _ = linregress(x_plot, y_plot)
-
         tendencia_linea = intercept_plot + slope_plot * x_plot
+        ax.plot(x_plot, tendencia_linea, color='white', linewidth=2, linestyle='-', label=f"Tendencia")
 
-        ax.plot(x_plot, tendencia_linea, color='white', linewidth=2, linestyle='-', label=f"Tendencia slope {slope_plot:.4f}")
+        residuos = y_plot - tendencia_linea
+        desviacion = np.std(residuos)
+        factor_canal = 1.5
+
+        canal_superior = tendencia_linea + (desviacion * factor_canal)
+        canal_inferior = tendencia_linea - (desviacion * factor_canal)
+
+        ax.plot(x_plot, canal_superior, linestyle='--', linewidth=2, color='red', label='Resistencia dinámica')
+        ax.plot(x_plot, canal_inferior, linestyle='--', linewidth=2, color='green', label='Soporte dinámico')
 
         # ======================================================
         # MARCAR VELA DE ENTRADA (ÚLTIMA VELA CERRADA)
         # ======================================================
-
         entrada_x = len(df_plot) - 1
         entrada_precio = closes[-1]
         entrada_time = times[-1]
@@ -676,39 +645,26 @@ def generar_grafico_entrada(df, decision, soporte, resistencia, slope, intercept
         # ======================================================
         # TEXTO DE ENTRADA
         # ======================================================
-
         texto_entrada = (
             f"{decision.upper()}\n"
             f"Precio: {entrada_precio:.2f}\n"
-            f"Hora: {entrada_time.strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
+            f"Balance: {PAPER_BALANCE:.2f} USD\n"
+            f"PnL Global: {PAPER_PNL_GLOBAL:.4f} USD\n"
             f"Razones: {', '.join(razones)}"
         )
-
-        ax.text(
-            0.02,
-            0.98,
-            texto_entrada,
-            transform=ax.transAxes,
-            fontsize=10,
-            verticalalignment='top',
-            bbox=dict(facecolor='black', alpha=0.6)
-        )
+        ax.text(0.02, 0.98, texto_entrada, transform=ax.transAxes, fontsize=11,
+            verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.85))
 
         # ======================================================
         # FORMATO
         # ======================================================
-
         ax.set_title(f"BTCUSDT - Velas Japonesas ({INTERVAL}m) - Entrada {decision}")
         ax.set_xlabel("Velas")
         ax.set_ylabel("Precio")
-
         ax.grid(True, alpha=0.2)
-
-        # Etiquetas de tiempo (cada 10 velas)
         step = max(1, int(len(df_plot) / 10))
         ax.set_xticks(x[::step])
         ax.set_xticklabels([t.strftime('%H:%M') for t in times[::step]], rotation=45)
-
         ax.legend(loc='lower left')
 
         plt.tight_layout()
@@ -762,102 +718,6 @@ Devuelve:
     except Exception as e:
         return f"Error Groq: {e}"
 
-# ======================================================
-# GRÁFICO DE ENTRADA (VELAS + SOPORTE/RESISTENCIA + TENDENCIA)
-# ======================================================
-
-# NOTA:
-# En tu código había una segunda función generar_grafico_entrada DUPLICADA.
-# No la elimino (según tu pedido), pero la arreglo para que no rompa el código.
-
-
-def generar_grafico_entrada(df, decision, soporte, resistencia, slope, intercept, razones):
-    try:
-        df_plot = df.copy().tail(120)
-
-        fig, ax = plt.subplots(figsize=(14, 7))
-
-        # Velas japonesas manuales
-        for i, (idx, row) in enumerate(df_plot.iterrows()):
-            o = row['open']
-            h = row['high']
-            l = row['low']
-            c = row['close']
-
-            # mecha
-            ax.plot([i, i], [l, h], color='black', linewidth=1)
-
-            # cuerpo
-            if c >= o:
-                ax.plot([i, i], [o, c], color='green', linewidth=6)
-            else:
-                ax.plot([i, i], [o, c], color='red', linewidth=6)
-
-        # soporte y resistencia horizontales
-        ax.axhline(soporte, color='blue', linestyle='--', linewidth=2, label='Soporte')
-        ax.axhline(resistencia, color='purple', linestyle='--', linewidth=2, label='Resistencia')
-
-        # tendencia inclinada basada en slope/intercept
-        y_trend = intercept + slope * np.arange(len(df_plot))
-        ax.plot(np.arange(len(df_plot)), y_trend, color='orange', linewidth=2, label='Tendencia')
-
-        # ======================================================
-        # CANAL DE TENDENCIA DINÁMICO (SOPORTE Y RESISTENCIA INCLINADOS)
-        # ======================================================
-        x_vals = np.arange(len(df_plot))
-        precios = df_plot['close'].values
-
-        slope_local, intercept_local, _, _, _ = linregress(x_vals, precios)
-        linea_central = intercept_local + slope_local * x_vals
-
-        residuos = precios - linea_central
-        desviacion = np.std(residuos)
-        factor_canal = 1.5
-
-        canal_superior = linea_central + (desviacion * factor_canal)
-        canal_inferior = linea_central - (desviacion * factor_canal)
-
-        ax.plot(x_vals, canal_superior, linestyle='--', linewidth=2, color='red', label='Resistencia dinámica')
-        ax.plot(x_vals, canal_inferior, linestyle='--', linewidth=2, color='green', label='Soporte dinámico')
-
-
-        # marcar vela de entrada (última)
-        entrada_index = len(df_plot) - 1
-        precio_entrada = df_plot['close'].iloc[-1]
-
-        ax.axvline(entrada_index, color='gold', linestyle='-', linewidth=2, label='Entrada')
-        ax.scatter([entrada_index], [precio_entrada], color='gold', s=150, marker='o')
-
-        # Texto de entrada (FIX COMPLETO DEL ERROR DE STRING)
-        texto_entrada = (
-            f"{decision.upper()}\n"
-            f"Precio: {precio_entrada:.2f}\n"
-            f"Balance: {PAPER_BALANCE:.2f} USD\n"
-            f"PnL Global: {PAPER_PNL_GLOBAL:.4f} USD\n"
-            f"Razones: {', '.join(razones)}"
-        )
-
-        ax.text(
-            0.02,
-            0.98,
-            texto_entrada,
-            transform=ax.transAxes,
-            fontsize=11,
-            verticalalignment='top',
-            bbox=dict(boxstyle='round', facecolor='white', alpha=0.85)
-        )
-
-        ax.set_title(f"{SYMBOL} - Entrada PAPER {decision}")
-        ax.set_xlabel("Velas")
-        ax.set_ylabel("Precio")
-        ax.grid(True)
-        ax.legend()
-
-        return fig
-
-    except Exception as e:
-        print(f"🚨 ERROR GRÁFICO: {e}")
-        return None
 
 # ======================================================
 # GRÁFICO DE SALIDA (NUEVO)
@@ -935,7 +795,6 @@ def generar_grafico_salida(df, trade_data):
 # MOTOR PAPER (EJECUCIÓN SIMULADA)
 # ======================================================
 
-
 def paper_abrir_posicion(decision, precio, atr, soporte, resistencia, razones, tiempo):
     global PAPER_POSICION_ACTIVA
     global PAPER_PRECIO_ENTRADA
@@ -959,11 +818,11 @@ def paper_abrir_posicion(decision, precio, atr, soporte, resistencia, razones, t
     if decision == "Buy":
         sl = precio - atr
         tp1 = precio + atr
-        tp2 = precio + (atr * 2)
+        tp2 = None  # TP2 dinámico
     elif decision == "Sell":
         sl = precio + atr
         tp1 = precio - atr
-        tp2 = precio - (atr * 2)
+        tp2 = None  # TP2 dinámico
     else:
         return False
 
@@ -1002,7 +861,9 @@ def paper_calcular_pnl(precio_actual):
     return 0.0
 
 
-
+# ======================================================
+# REVISIÓN DE SL/TP (CON TRAILING DINÁMICO INTEGRADO)
+# ======================================================
 def paper_revisar_sl_tp(df):
     global PAPER_SL, PAPER_TP1, PAPER_TP2
     global PAPER_PRECIO_ENTRADA, PAPER_DECISION_ACTIVA
@@ -1019,57 +880,72 @@ def paper_revisar_sl_tp(df):
 
     high = df['high'].iloc[-1]
     low = df['low'].iloc[-1]
+    close = df['close'].iloc[-1]
+    atr_actual = df['atr'].iloc[-1]
 
     cerrar_total = False
     motivo = None
 
+    # Multiplicador dinámico para el trailing stop (Distancia)
+    TRAILING_MULT = 1.2 
+
     # ===== BUY =====
     if PAPER_POSICION_ACTIVA == "Buy":
+        # 1. Verificar TP1 (50%)
         if (not PAPER_TP1_EJECUTADO) and high >= PAPER_TP1:
             pnl_parcial = (PAPER_TP1 - PAPER_PRECIO_ENTRADA) * (PAPER_SIZE_BTC / 2)
             PAPER_BALANCE += pnl_parcial
             PAPER_PNL_GLOBAL += pnl_parcial
             PAPER_SIZE_BTC_RESTANTE = PAPER_SIZE_BTC / 2
             PAPER_TP1_EJECUTADO = True
-            PAPER_SL = PAPER_PRECIO_ENTRADA
-            telegram_mensaje("🎯 TP1 alcanzado - 50% cerrado y SL a BE")
+            PAPER_SL = PAPER_PRECIO_ENTRADA # Mueve SL a Break Even inicial
+            telegram_mensaje("🎯 TP1 alcanzado - 50% cerrado y SL a BE. Activando Trailing...")
 
+        # 2. Gestión de Trailing Stop Dinámico (Sustituye al TP2)
+        if PAPER_TP1_EJECUTADO:
+            nuevo_sl_dinamico = close - (atr_actual * TRAILING_MULT)
+            if nuevo_sl_dinamico > PAPER_SL:
+                PAPER_SL = nuevo_sl_dinamico # El SL sube persiguiendo el precio
+
+        # 3. Verificar salida final
         if low <= PAPER_SL:
             cerrar_total = True
-            motivo = "SL"
-        elif high >= PAPER_TP2:
-            cerrar_total = True
-            motivo = "TP2"
+            motivo = "Trailing Stop (TP2 Dinámico)" if PAPER_TP1_EJECUTADO else "Stop Loss"
+
 
     # ===== SELL =====
     elif PAPER_POSICION_ACTIVA == "Sell":
+        # 1. Verificar TP1 (50%)
         if (not PAPER_TP1_EJECUTADO) and low <= PAPER_TP1:
             pnl_parcial = (PAPER_PRECIO_ENTRADA - PAPER_TP1) * (PAPER_SIZE_BTC / 2)
             PAPER_BALANCE += pnl_parcial
             PAPER_PNL_GLOBAL += pnl_parcial
             PAPER_SIZE_BTC_RESTANTE = PAPER_SIZE_BTC / 2
             PAPER_TP1_EJECUTADO = True
-            PAPER_SL = PAPER_PRECIO_ENTRADA
-            telegram_mensaje("🎯 TP1 alcanzado - 50% cerrado y SL a BE")
+            PAPER_SL = PAPER_PRECIO_ENTRADA # Mueve SL a Break Even inicial
+            telegram_mensaje("🎯 TP1 alcanzado - 50% cerrado y SL a BE. Activando Trailing...")
 
+        # 2. Gestión de Trailing Stop Dinámico (Sustituye al TP2)
+        if PAPER_TP1_EJECUTADO:
+            nuevo_sl_dinamico = close + (atr_actual * TRAILING_MULT)
+            if nuevo_sl_dinamico < PAPER_SL:
+                PAPER_SL = nuevo_sl_dinamico # El SL baja persiguiendo el precio
+
+        # 3. Verificar salida final
         if high >= PAPER_SL:
             cerrar_total = True
-            motivo = "SL"
-        elif low <= PAPER_TP2:
-            cerrar_total = True
-            motivo = "TP2"
+            motivo = "Trailing Stop (TP2 Dinámico)" if PAPER_TP1_EJECUTADO else "Stop Loss"
 
-    # ===== CIERRE TOTAL (DENTRO DE LA FUNCIÓN) =====
+    # ===== CIERRE TOTAL =====
     if cerrar_total:
         if PAPER_POSICION_ACTIVA == "Buy":
-            precio_salida = PAPER_TP2 if motivo == "TP2" else PAPER_SL
-            pnl_final = (precio_salida - PAPER_PRECIO_ENTRADA) * PAPER_SIZE_BTC_RESTANTE
+            pnl_final = (PAPER_SL - PAPER_PRECIO_ENTRADA) * PAPER_SIZE_BTC_RESTANTE
         else:
-            precio_salida = PAPER_TP2 if motivo == "TP2" else PAPER_SL
-            pnl_final = (PAPER_PRECIO_ENTRADA - precio_salida) * PAPER_SIZE_BTC_RESTANTE
+            pnl_final = (PAPER_PRECIO_ENTRADA - PAPER_SL) * PAPER_SIZE_BTC_RESTANTE
 
         decision_guardada = PAPER_DECISION_ACTIVA
         entrada_guardada = PAPER_PRECIO_ENTRADA
+        salida_guardada = PAPER_SL
         balance_final = PAPER_BALANCE + pnl_final
 
         PAPER_BALANCE += pnl_final
@@ -1078,7 +954,7 @@ def paper_revisar_sl_tp(df):
         PAPER_ULTIMO_PNL = pnl_final
         PAPER_ULTIMO_RESULTADO = motivo
 
-        # RESET
+        # RESET VARIABLES
         PAPER_POSICION_ACTIVA = None
         PAPER_DECISION_ACTIVA = None
         PAPER_PRECIO_ENTRADA = None
@@ -1095,7 +971,7 @@ def paper_revisar_sl_tp(df):
             "decision": decision_guardada,
             "motivo": motivo,
             "entrada": entrada_guardada,
-            "salida": precio_salida,
+            "salida": salida_guardada,
             "pnl": pnl_final,
             "balance": balance_final
         }
@@ -1140,13 +1016,6 @@ def risk_management_check():
 # ======================================================
 # SISTEMA SECUNDARIO INSTITUCIONAL (NO REEMPLAZA EL SISTEMA PRINCIPAL)
 # ======================================================
-# Funciones añadidas:
-# 1 BOS Externo (estructura mayor)
-# Pullback válido estructural
-# Gestión parcial real (50% TP1 / 50% TP2)
-# Estadísticas avanzadas internas
-# Log detallado enviado a Telegram (sin CSV)
-# ======================================================
 
 class InstitutionalStats:
     def __init__(self):
@@ -1155,8 +1024,8 @@ class InstitutionalStats:
         self.losses = 0
         self.partial_wins = 0
         self.total_rr = 0.0
-        self.equity_curve = []
-        self.trade_log = []
+        self.equity_curve =[]
+        self.trade_log =[]
 
     def register_trade(self, result_rr, partial=False):
         self.total_trades += 1
@@ -1180,7 +1049,6 @@ class InstitutionalStats:
         if self.total_trades == 0:
             return 0
         return self.total_rr / self.total_trades
-
 
 class ExternalBOSDetector:
     def __init__(self, lookback=50):
@@ -1209,7 +1077,6 @@ class ExternalBOSDetector:
 
         return bos_alcista, bos_bajista, swing_high, swing_low
 
-
 class PullbackValidator:
     def __init__(self, tolerance=0.3):
         self.tolerance = tolerance
@@ -1226,7 +1093,6 @@ class PullbackValidator:
             return precio_actual >= zona_pullback
 
         return False
-
 
 class PartialTPManager:
     def __init__(self):
@@ -1262,7 +1128,6 @@ class PartialTPManager:
 
         return resultado
 
-
 class InstitutionalLogger:
     def __init__(self, telegram_send_func):
         self.send_telegram = telegram_send_func
@@ -1284,11 +1149,6 @@ class InstitutionalLogger:
 🔢 Total Trades: {data.get('total_trades')}
 """
         self.send_telegram(mensaje)
-
-
-# ======================================================
-# INTEGRADOR DEL SISTEMA SECUNDARIO (CAPA NO INTRUSIVA)
-# ======================================================
 
 class InstitutionalSecondarySystem:
     def __init__(self, telegram_send_func):
@@ -1334,13 +1194,12 @@ class InstitutionalSecondarySystem:
         trade_data["total_trades"] = self.stats.total_trades
         self.logger.log_operacion_completa(trade_data)
 
-
 # ======================================================
 # LOOP PRINCIPAL
 # ======================================================
 
 def run_bot():
-    telegram_mensaje("🤖 BOT V90.5 BYBIT REAL INICIADO (ARSENAL NISON COMPLETO)")
+    telegram_mensaje("🤖 BOT V90.6 BYBIT REAL INICIADO (NISON + TRAILING DINÁMICO)")
 
     # ======================================================
     # INICIALIZAR SISTEMA INSTITUCIONAL SECUNDARIO
@@ -1447,7 +1306,7 @@ def run_bot():
                 mensaje = (
                     f"📌 ENTRADA PAPER {decision}\n"
                     f"💰 Precio: {precio:.2f}\n"
-                    f"📍 SL: {PAPER_SL:.2f} | TP: {PAPER_TP:.2f}\n"
+                    f"📍 SL: {PAPER_SL:.2f} | TP: {PAPER_TP1:.2f} (Parcial)\n"
                     f"💵 Balance: {PAPER_BALANCE:.2f} USD\n"
                     f"📈 PnL flotante: {pnl_flotante:.4f} USD\n"
                     f"🧠 {', '.join(razones)}"
@@ -1479,18 +1338,16 @@ def run_bot():
                     # Mensaje texto
                     mensaje_cierre = (
                         f"📌 CIERRE PAPER {cierre['decision']} ({cierre['motivo']})\n"
-                        f"💰 PnL: {cierre['pnl']:.4f} USD\n"
+                        f"💰 PnL Final: {cierre['pnl']:.4f} USD\n"
                         f"💵 Balance: {cierre['balance']:.2f} USD"
                     )
                     telegram_mensaje(mensaje_cierre)
                     
-                    # Grafico Salida (NUEVO)
+                    # Grafico Salida
                     fig_salida = generar_grafico_salida(df, cierre)
                     if fig_salida:
                         telegram_grafico(fig_salida)
                         plt.close(fig_salida)
-
-            time.sleep(SLEEP_SECONDS)
 
         except Exception as e:
             print(f"🚨 ERROR: {e}")
@@ -1503,172 +1360,3 @@ def run_bot():
 
 if __name__ == '__main__':
     run_bot()
-
-
-# ======================================================
-# NUEVA GESTIÓN DINÁMICA DE TRADE (ATR TRAILING SYSTEM)
-# ======================================================
-# Entrada → igual
-# TP1 → 1 ATR (50%)
-# Break Even → automático
-# Trailing → 1.2 ATR
-# Sin TP final
-
-TRAILING_ACTIVO = False
-MAX_PRECIO_ALCANZADO = None
-MIN_PRECIO_ALCANZADO = None
-
-ATR_MULT_SL = 1.1
-ATR_MULT_TP1 = 1.0
-ATR_TRAILING = 1.2
-BE_BUFFER = 0.15
-
-def activar_trailing(precio_actual, direccion):
-    global TRAILING_ACTIVO, MAX_PRECIO_ALCANZADO, MIN_PRECIO_ALCANZADO
-    
-    TRAILING_ACTIVO = True
-    
-    if direccion == "LONG":
-        MAX_PRECIO_ALCANZADO = precio_actual
-    else:
-        MIN_PRECIO_ALCANZADO = precio_actual
-
-
-def actualizar_trailing(precio_actual, atr, direccion):
-    global MAX_PRECIO_ALCANZADO, MIN_PRECIO_ALCANZADO
-
-    if not TRAILING_ACTIVO:
-        return None
-
-    if direccion == "LONG":
-        if MAX_PRECIO_ALCANZADO is None or precio_actual > MAX_PRECIO_ALCANZADO:
-            MAX_PRECIO_ALCANZADO = precio_actual
-
-        trailing_sl = MAX_PRECIO_ALCANZADO - (ATR_TRAILING * atr)
-        return trailing_sl
-
-    elif direccion == "SHORT":
-        if MIN_PRECIO_ALCANZADO is None or precio_actual < MIN_PRECIO_ALCANZADO:
-            MIN_PRECIO_ALCANZADO = precio_actual
-
-        trailing_sl = MIN_PRECIO_ALCANZADO + (ATR_TRAILING * atr)
-        return trailing_sl
-
-
-def ejecutar_tp1_y_break_even(precio_entrada, atr, direccion):
-    """
-    Cierra 50% y mueve SL a Break Even + buffer.
-    """
-    if direccion == "LONG":
-        nuevo_sl = precio_entrada + (BE_BUFFER * atr)
-    else:
-        nuevo_sl = precio_entrada - (BE_BUFFER * atr)
-
-    return nuevo_sl
-
-
-def reset_trailing():
-    global TRAILING_ACTIVO, MAX_PRECIO_ALCANZADO, MIN_PRECIO_ALCANZADO
-
-    TRAILING_ACTIVO = False
-    MAX_PRECIO_ALCANZADO = None
-    MIN_PRECIO_ALCANZADO = None
-
-# ======================================================
-# FIN GESTIÓN DINÁMICA ATR
-# ======================================================
-
-# =====================================================
-# TREND FOLLOW INTEGRADO (TP2 DINÁMICO EN FLUJO PRINCIPAL)
-# =====================================================
-# Este módulo integra trailing dinámico al flujo principal
-# sin depender de un TP2 fijo. Tras TP1:
-#   • Cierra 50%
-#   • SL -> Break Even
-#   • Activa trailing por ATR
-#   • Cierre final por retroceso al SL dinámico
-
-TRAILING_MULTIPLIER = 1.2
-
-class _TrendFollowState:
-    trailing_activo = False
-    tp1_ejecutado = False
-
-_TF_STATE = _TrendFollowState()
-
-def tf_activar_trailing():
-    _TF_STATE.trailing_activo = True
-
-def tf_reset():
-    _TF_STATE.trailing_activo = False
-    _TF_STATE.tp1_ejecutado = False
-
-def tf_actualizar_trailing(precio_actual, atr, tipo_operacion, sl_actual):
-    if not _TF_STATE.trailing_activo:
-        return sl_actual
-
-    if tipo_operacion == "BUY":
-        nuevo_sl = precio_actual - (atr * TRAILING_MULTIPLIER)
-        if nuevo_sl > sl_actual:
-            return nuevo_sl
-
-    elif tipo_operacion == "SELL":
-        nuevo_sl = precio_actual + (atr * TRAILING_MULTIPLIER)
-        if nuevo_sl < sl_actual:
-            return nuevo_sl
-
-    return sl_actual
-
-def tf_on_tp1():
-    # Llamar justo después de cerrar el 50% en TP1
-    _TF_STATE.tp1_ejecutado = True
-    tf_activar_trailing()
-
-# -------- Integración automática por monkey patch --------
-# Si el bot tiene funciones comunes de gestión, intentamos integrarnos.
-
-def _tf_try_patch():
-    g = globals()
-
-    # Patch de función que maneja TP1 parcial
-    for name in ["cerrar_parcial_50", "close_partial_tp1", "ejecutar_tp1", "take_profit_parcial"]:
-        if name in g and callable(g[name]):
-            orig = g[name]
-            def wrapped_tp1(*a, __orig=orig, **kw):
-                r = __orig(*a, **kw)
-                try:
-                    tf_on_tp1()
-                except Exception:
-                    pass
-                return r
-            g[name] = wrapped_tp1
-
-    # Patch de función que actualiza SL dinámicamente o loop de gestión
-    for name in ["actualizar_sl", "update_stop_loss", "gestionar_trade", "manage_trade", "trade_loop"]:
-        if name in g and callable(g[name]):
-            orig = g[name]
-            def wrapped_manage(*a, __orig=orig, **kw):
-                r = __orig(*a, **kw)
-                try:
-                    # Intentamos leer variables típicas del contexto global
-                    precio_actual = g.get("precio_actual") or g.get("current_price")
-                    atr = g.get("atr") or g.get("ATR")
-                    tipo = g.get("tipo_operacion") or g.get("side")
-                    sl = g.get("sl_actual") or g.get("stop_loss")
-
-                    if precio_actual and atr and tipo and sl:
-                        nuevo_sl = tf_actualizar_trailing(precio_actual, atr, tipo, sl)
-                        if "sl_actual" in g:
-                            g["sl_actual"] = nuevo_sl
-                        if "stop_loss" in g:
-                            g["stop_loss"] = nuevo_sl
-                except Exception:
-                    pass
-                return r
-            g[name] = wrapped_manage
-
-_tf_try_patch()
-
-# =====================================================
-# FIN TREND FOLLOW INTEGRADO
-# =====================================================

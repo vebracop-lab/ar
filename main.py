@@ -1,13 +1,14 @@
-# BOT TRADING V90.6 BYBIT REAL – PRODUCCIÓN (SIN PROXY) + NISON + TRAILING DINÁMICO
+# BOT TRADING V90.7 BYBIT REAL – PRODUCCIÓN (SIN PROXY) + NISON + LATERALES
 # ======================================================
 # ⚠️ KEYS INCLUIDAS TAL CUAL (SEGÚN PEDIDO)
 # Diseñado para FUTUROS PERPETUOS BTCUSDT en Bybit
 # ======================================================
-# NOVEDADES V90.6:
+# NOVEDADES V90.7:
+# - Operativa habilitada en mercados LATERALES (Rangos).
+# - Compras en soporte y ventas en resistencia dentro de rangos.
 # - Integración 100% nativa de Trailing Stop Dinámico (TP2 Infinito).
-# - Corrección de error de variable "None" en TP2.
-# - Limpieza de módulos inactivos/experimentales al final del script.
 # - Mantenimiento de contexto estricto para los 10 patrones Nison.
+# - Limpieza de código inactivo.
 # ======================================================
 
 import os
@@ -289,7 +290,7 @@ def detectar_tendencia(df, ventana=120):
     return slope, intercept, direccion
 
 # ======================================================
-# MOTOR V90
+# MOTOR V90 (SOPORTA LATERALES V90.7)
 # ======================================================
 
 def motor_v90(df):
@@ -300,12 +301,14 @@ def motor_v90(df):
 
     razones =[]
 
-    if tendencia == '📈 ALCISTA' and cerca_de_nivel(precio, soporte) < atr:
-        razones.append('Confluencia: soporte + tendencia alcista')
+    # En tendencia alcista o lateral, buscamos compras en SOPORTE
+    if tendencia in['📈 ALCISTA', '➡️ LATERAL'] and cerca_de_nivel(precio, soporte) < atr:
+        razones.append(f'Confluencia: soporte + tendencia {tendencia.split()[-1].lower()}')
         return 'Buy', soporte, resistencia, razones
 
-    if tendencia == '📉 BAJISTA' and cerca_de_nivel(precio, resistencia) < atr:
-        razones.append('Confluencia: resistencia + tendencia bajista')
+    # En tendencia bajista o lateral, buscamos ventas en RESISTENCIA
+    if tendencia in['📉 BAJISTA', '➡️ LATERAL'] and cerca_de_nivel(precio, resistencia) < atr:
+        razones.append(f'Confluencia: resistencia + tendencia {tendencia.split()[-1].lower()}')
         return 'Sell', soporte, resistencia, razones
 
     razones.append('Sin confluencia válida')
@@ -499,14 +502,15 @@ def detectar_patron_nison(df, soporte, resistencia, tendencia_global):
     precio_actual = df['close'].iloc[idx]
     atr = df['atr'].iloc[idx]
     
-    # 1. Definir Tendencia Previa Inmediata
+    # 1. Definir Tendencia Previa Inmediata (Micro-Tendencia)
     t_prev = tendencia_previa_nison(df, velas=7)
     
     # 2. Definir Zonas
     en_soporte = cerca_de_nivel(precio_actual, soporte, margen=atr*0.8)
     en_resistencia = cerca_de_nivel(precio_actual, resistencia, margen=atr*0.8)
     
-    # --- PATRONES ALCISTAS (REQUIEREN SOPORTE + TENDENCIA BAJISTA PREVIA) ---
+    # --- PATRONES ALCISTAS (REQUIEREN SOPORTE + MICRO-TENDENCIA BAJISTA) ---
+    # Nota: Aunque el mercado MACRO sea lateral, el pullback al soporte debe ser bajista.
     if t_prev == "bajista" and en_soporte:
         if es_hammer_nison(df, idx):
             return True, "Nison Hammer"
@@ -519,7 +523,8 @@ def detectar_patron_nison(df, soporte, resistencia, tendencia_global):
         if es_tweezer_bottom_nison(df, idx):
             return True, "Nison Tweezer Bottoms"
 
-    # --- PATRONES BAJISTAS (REQUIEREN RESISTENCIA + TENDENCIA ALCISTA PREVIA) ---
+    # --- PATRONES BAJISTAS (REQUIEREN RESISTENCIA + MICRO-TENDENCIA ALCISTA) ---
+    # Nota: Aunque el mercado MACRO sea lateral, el rally a la resistencia debe ser alcista.
     if t_prev == "alcista" and en_resistencia:
         if es_shooting_star_nison(df, idx):
             return True, "Nison Shooting Star"
@@ -547,10 +552,8 @@ def filtro_maestro_nison(
 ):
     """
     Entrada permitida SOLO si se cumplen:
-
-    Patrón + Zona + Tendencia + Estructura (BOS)
+    Patrón + Zona + Tendencia + Estructura (BOS o Lateral válido)
     """
-
     if patron_detectado and zona_valida and tendencia_valida and estructura_valida:
         return True
 
@@ -766,7 +769,7 @@ def generar_grafico_salida(df, trade_data):
         color_salida = 'lime' if pnl > 0 else 'red'
         marker_salida = '^' if pnl > 0 else 'v' 
         
-        ax.scatter([indice_salida], [salida_price], s=200, c=color_salida, marker=marker_salida, edgecolors='black', zorder=5, label=f'Cierre ({motivo})')
+        ax.scatter([indice_salida],[salida_price], s=200, c=color_salida, marker=marker_salida, edgecolors='black', zorder=5, label=f'Cierre ({motivo})')
 
         # 5. CUADRO DE INFORMACIÓN
         texto_info = (
@@ -1199,7 +1202,7 @@ class InstitutionalSecondarySystem:
 # ======================================================
 
 def run_bot():
-    telegram_mensaje("🤖 BOT V90.6 BYBIT REAL INICIADO (NISON + TRAILING DINÁMICO)")
+    telegram_mensaje("🤖 BOT V90.7 BYBIT REAL INICIADO (NISON + LATERALES)")
 
     # ======================================================
     # INICIALIZAR SISTEMA INSTITUCIONAL SECUNDARIO
@@ -1237,28 +1240,29 @@ def run_bot():
                 zona_valida = True
 
             # =========================
-            # TENDENCIA PREVIA
+            # TENDENCIA PREVIA (MACRO)
             # =========================
-            if decision == "Buy" and tendencia == '📈 ALCISTA':
+            # V90.7: Se habilita operar en mercados laterales
+            if decision == "Buy" and tendencia in['📈 ALCISTA', '➡️ LATERAL']:
                 tendencia_valida = True
 
-            if decision == "Sell" and tendencia == '📉 BAJISTA':
+            if decision == "Sell" and tendencia in['📉 BAJISTA', '➡️ LATERAL']:
                 tendencia_valida = True
 
             # =========================
             # ESTRUCTURA (sin BOS, usando slope)
             # =========================
-            if decision == "Buy" and slope > 0:
+            if decision == "Buy" and (slope > 0 or tendencia == '➡️ LATERAL'):
                 estructura_valida = True
 
-            if decision == "Sell" and slope < 0:
+            if decision == "Sell" and (slope < 0 or tendencia == '➡️ LATERAL'):
                 estructura_valida = True
 
             # =========================
             # DETECCIÓN PATRÓN NISON REAL (CON CONTEXTO)
             # =========================
-            # NOTA: detectar_patron_nison ahora verifica internamente
-            # la tendencia previa inmediata y la zona exacta.
+            # NOTA: detectar_patron_nison verifica internamente
+            # la tendencia previa inmediata (micro-tendencia) y la zona exacta.
             patron_detectado, nombre_patron = detectar_patron_nison(
                 df, soporte, resistencia, tendencia
             )

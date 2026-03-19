@@ -34,7 +34,7 @@ plt.rcParams['figure.figsize'] = (12, 6)
 GRAFICO_VELAS_LIMIT = 120
 MOSTRAR_EMA20 = True
 MOSTRAR_ATR = False
-MARGEN_NIVEL = 80  # puntos de precio BTC
+MARGEN_NIVEL = 250  # puntos de precio BTC
 
 def cerca_de_nivel(precio, nivel, margen=MARGEN_NIVEL):
     distancia = abs(precio - nivel)
@@ -231,8 +231,8 @@ def calcular_indicadores(df):
     return df_limpio
 
 def detectar_soportes_resistencias(df):
-    soporte = df['close'].rolling(200).min().iloc[-1]
-    resistencia = df['close'].rolling(200).max().iloc[-1]
+    soporte = df['close'].rolling(50).min().iloc[-1]
+    resistencia = df['close'].rolling(50).max().iloc[-1]
     return soporte, resistencia
 
 def detectar_tendencia_macro(df, ventana=120):
@@ -321,7 +321,7 @@ def tendencia_previa_micro(df, idx, velas=8):
     
     slope, intercept, r_value, p_value, std_err = linregress(x, y)
     
-    if slope < -0.2: 
+    if slope < -0.02: 
         return "bajista"
     elif slope > 0.2: 
         return "alcista"
@@ -359,10 +359,10 @@ def es_hammer_nison(df, idx):
         cuerpo = 0.0001
     
     # 1. Regla: Sombra inferior al menos el doble del cuerpo
-    condicion_mecha_larga = m_inf >= (2.0 * cuerpo)
+    condicion_mecha_larga = m_inf >= (1.4 * cuerpo)
     
     # 2. Regla: Sombra superior inexistente o diminuta
-    condicion_sin_mecha_arriba = m_sup <= (0.15 * rango)
+    condicion_sin_mecha_arriba = m_sup <= (0.45 * rango)
     
     # 3. Regla: El cuerpo debe estar alojado en el tercio superior de la vela total
     umbral_tercio_superior = vela_martillo['low'] + (rango * 0.70)

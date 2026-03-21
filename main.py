@@ -1,7 +1,3 @@
-# VERSION PRO OPTIMIZADA
-MODO='agresivo'
-USAR_RSI=False
-
 # BOT TRADING V91.0 BYBIT REAL – PRODUCCIÓN (SIN PROXY) 
 # ======================================================
 # ⚠️ KEYS INCLUIDAS TAL CUAL (SEGÚN PEDIDO)

@@ -33,7 +33,7 @@ plt.rcParams['figure.figsize'] = (12, 6)
 GRAFICO_VELAS_LIMIT = 120
 MOSTRAR_EMA20 = True
 MOSTRAR_ATR = False
-MARGEN_NIVEL = 250  # Tolerancia base para Soportes y Resistencias
+MARGEN_NIVEL = None  # ya no se usa  # Tolerancia base para Soportes y Resistencias
 
 def cerca_de_nivel(precio, nivel, margen=MARGEN_NIVEL):
     distancia = abs(precio - nivel)
@@ -200,7 +200,7 @@ def obtener_velas(limit=300):
     return df
 
 # ======================================================
-# INDICADORES Y RSI (PARA FILTRO DE SOBREEXTENSIÓN)
+# INDICADORES (RSI ya no se usa como filtro)
 # ======================================================
 def calcular_indicadores(df):
     # Media Móvil
@@ -551,8 +551,6 @@ def es_three_black_crows(df, idx):
     c1, c2, c3 = df.iloc[idx-2], df.iloc[idx-1], df.iloc[idx]
     
     # RSI Humano: No vender en pánico cuando ya está sobrevendido.
-    rsi_actual = df['rsi'].iloc[idx]
-    if rsi_actual < 35: return False
     
     es_c1_roja = c1['close'] < c1['open']
     es_c2_roja = c2['close'] < c2['open']
@@ -577,7 +575,7 @@ def detectar_patron_nison(df, soporte, resistencia):
     
     # 2. ¿Estamos en una zona relevante?
     # Tolerancia humana: Un soporte no es una línea, es una zona de varios dólares.
-    tolerancia_zona = max(atr_actual * 1.5, MARGEN_NIVEL)
+    tolerancia_zona = atr_actual * 2.0
     
     en_soporte = cerca_de_nivel(precio_actual, soporte, tolerancia_zona)
     en_resistencia = cerca_de_nivel(precio_actual, resistencia, tolerancia_zona)
@@ -1218,14 +1216,7 @@ def run_bot():
 
             decision_final = decision_cruda
 
-            # 4. Filtro Supremo Macro
-            if decision_final == "Buy":
-                if tendencia_macro == '📉 BAJISTA': 
-                    decision_final = None 
-                    
-            if decision_final == "Sell":
-                if tendencia_macro == '📈 ALCISTA': 
-                    decision_final = None 
+            # 4. Filtro Supremo Macro (DESACTIVADO - solo informativo)
 
             # 5. Registro Consola
             if patron_detectado == True:
@@ -1238,7 +1229,7 @@ def run_bot():
             # 6. Toma de Decisión y Ejecución
             if decision_final is not None:
                 razones_para_entrar.append(f"✅ Arquitectura Confirmada: {nombre_patron}")
-                razones_para_entrar.append(f"📊 Tendencia MACRO Válida: {tendencia_macro}")
+                razones_para_entrar.append(f"📊 Tendencia MACRO (informativa): {tendencia_macro}")
                 razones_para_entrar.append(f"🛡️ Geometría de S/R Respetada")
                 
                 riesgo_valido = risk_management_check()

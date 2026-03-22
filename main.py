@@ -577,11 +577,11 @@ def detectar_patron_nison(df, soporte, resistencia):
     # Tolerancia humana: Un soporte no es una línea, es una zona de varios dólares.
     tolerancia_zona = atr_actual * 2.0
     
-    en_soporte = cerca_de_nivel(precio_actual, soporte, tolerancia_zona)
-    en_resistencia = cerca_de_nivel(precio_actual, resistencia, tolerancia_zona)
+    en_soporte =  # informativo cerca_de_nivel(precio_actual, soporte, tolerancia_zona)
+    en_resistencia =  # informativo cerca_de_nivel(precio_actual, resistencia, tolerancia_zona)
     
     # --- PATRONES DE COMPRA ---
-    if tendencia_previa == "bajista" and en_soporte:
+    if tendencia_previa == "bajista":
         if es_hammer_nison(df, idx): return True, "Buy", "Nison Hammer"
         if es_bullish_engulfing_nison(df, idx): return True, "Buy", "Nison Bullish Engulfing"
         if es_piercing_nison(df, idx): return True, "Buy", "Nison Piercing Pattern"
@@ -590,7 +590,7 @@ def detectar_patron_nison(df, soporte, resistencia):
         if es_three_white_soldiers(df, idx): return True, "Buy", "Three White Soldiers"
 
     # --- PATRONES DE VENTA ---
-    if tendencia_previa == "alcista" and en_resistencia:
+    if tendencia_previa == "alcista":
         if es_shooting_star_nison(df, idx): return True, "Sell", "Nison Shooting Star"
         if es_bearish_engulfing_nison(df, idx): return True, "Sell", "Nison Bearish Engulfing"
         if es_dark_cloud_nison(df, idx): return True, "Sell", "Nison Dark Cloud Cover"

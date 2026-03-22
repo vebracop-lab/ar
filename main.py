@@ -577,8 +577,8 @@ def detectar_patron_nison(df, soporte, resistencia):
     # Tolerancia humana: Un soporte no es una línea, es una zona de varios dólares.
     tolerancia_zona = atr_actual * 2.0
     
-    en_soporte =  # informativo cerca_de_nivel(precio_actual, soporte, tolerancia_zona)
-    en_resistencia =  # informativo cerca_de_nivel(precio_actual, resistencia, tolerancia_zona)
+    en_soporte = cerca_de_nivel(precio_actual, soporte, tolerancia_zona)  # informativo
+    en_resistencia = cerca_de_nivel(precio_actual, resistencia, tolerancia_zona)  # informativo
     
     # --- PATRONES DE COMPRA ---
     if tendencia_previa == "bajista":

@@ -1,14 +1,13 @@
-# BOT TRADING V91.0 BYBIT REAL – PRODUCCIÓN (SIN PROXY) 
+# BOT TRADING V91.1 BYBIT REAL – PRODUCCIÓN (SIN PROXY) 
 # ======================================================
 # ⚠️ KEYS INCLUIDAS TAL CUAL (SEGÚN PEDIDO)
 # Diseñado para FUTUROS PERPETUOS BTCUSDT en Bybit
 # ======================================================
-# NOVEDADES V91.0 (HUMANIZED NISON & CRYPTO CONTEXT):
-# - Flexibilización de proporciones (Arte vs Ciencia).
-# - Adaptación de Gaps de Nison para mercados 24/7 (Crypto).
-# - Lectura de agotamiento de tendencia real con RSI.
-# - Tolerancia visual elástica en mechas y cuerpos.
-# - CÓDIGO 100% EXPANDIDO SIN RESÚMENES.
+# NOVEDADES V91.1 (SUPER HUMANIZED NISON):
+# - Patrones relajados visualmente (1.2x mechas, 35% penetración).
+# - Tolerancia amplia en pinzas (0.35 ATR) y cuerpos de estrella.
+# - Cierres de intención flexibles (hasta 40% de mecha de rechazo).
+# - 100% CÓDIGO EXPANDIDO, SIN RECORTES.
 # ======================================================
 
 import os
@@ -33,7 +32,7 @@ plt.rcParams['figure.figsize'] = (12, 6)
 GRAFICO_VELAS_LIMIT = 120
 MOSTRAR_EMA20 = True
 MOSTRAR_ATR = False
-MARGEN_NIVEL = None  # ya no se usa  # Tolerancia base para Soportes y Resistencias
+MARGEN_NIVEL = 250  # Tolerancia base para Soportes y Resistencias
 
 def cerca_de_nivel(precio, nivel, margen=MARGEN_NIVEL):
     distancia = abs(precio - nivel)
@@ -200,7 +199,7 @@ def obtener_velas(limit=300):
     return df
 
 # ======================================================
-# INDICADORES (RSI ya no se usa como filtro)
+# INDICADORES Y RSI
 # ======================================================
 def calcular_indicadores(df):
     # Media Móvil
@@ -214,9 +213,8 @@ def calcular_indicadores(df):
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     df['atr'] = tr.rolling(14).mean()
 
-    # Cálculo del RSI de 14 periodos paso a paso
+    # Cálculo del RSI de 14 periodos
     delta = df['close'].diff()
-    
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
     
@@ -230,7 +228,7 @@ def calcular_indicadores(df):
     return df_limpio
 
 def detectar_soportes_resistencias(df):
-    # Soportes y resistencias macro (los últimos 50 periodos dan niveles relevantes intradía)
+    # Soportes y resistencias macro 
     soporte = df['close'].rolling(50).min().iloc[-1]
     resistencia = df['close'].rolling(50).max().iloc[-1]
     return soporte, resistencia
@@ -252,7 +250,7 @@ def detectar_tendencia_macro(df, ventana=120):
 
 
 # ======================================================
-# 🕯️ ARSENAL NISON (MODO HUMANIZADO & CRYPTO)
+# 🕯️ ARSENAL NISON (SÚPER HUMANIZADO)
 # ======================================================
 
 def calcular_cuerpo_mechas(row):
@@ -277,39 +275,40 @@ def calcular_cuerpo_mechas(row):
 
 def tendencia_previa_micro(df, idx, velas=6):
     """
-    HUMANIZADO: Un trader real mira las últimas 4 a 6 velas para ver 
-    si hay un impulso claro o un agotamiento. Evaluamos la diferencia real de precio.
+    HUMANIZADO: Un trader mira si el precio simplemente bajó o subió recientemente.
     """
     if idx - velas < 0: 
         return "neutral"
         
     precio_inicio = df['close'].iloc[idx-velas]
     precio_fin = df['close'].iloc[idx-1]
-    
     atr_actual = df['atr'].iloc[idx]
     
-    # Si el precio ha caído al menos medio ATR en las últimas velas, es una bajada válida
-    if precio_fin < (precio_inicio - (atr_actual * 0.5)):
+    # Tolerancia humana: una bajada de medio ATR visualmente ya es un pullback
+    if precio_fin < (precio_inicio - (atr_actual * 0.4)):
         return "bajista"
-    # Si el precio ha subido al menos medio ATR, es una subida válida
-    elif precio_fin > (precio_inicio + (atr_actual * 0.5)):
+    elif precio_fin > (precio_inicio + (atr_actual * 0.4)):
         return "alcista"
     else:
         return "lateral"
 
 def cierre_fuerte(row, direccion):
     """
-    HUMANIZADO: Un cierre fuerte significa que el precio cerró empujando en la 
-    dirección correcta, sin una mecha gigante en contra. 
+    HUMANIZADO: Un cierre fuerte significa que cerró empujando, 
+    pero permitimos una mecha de hasta el 40% del rango total de la vela.
+    A los ojos de un humano, eso sigue siendo una vela sólida.
     """
     cuerpo, mecha_sup, mecha_inf, rango, top, bottom = calcular_cuerpo_mechas(row)
+    limite_tolerancia = rango * 0.40
     
     if direccion == "alcista":
-        # Es válido si la mecha superior no es más grande que el cuerpo (permite cierta toma de ganancias)
-        return mecha_sup <= cuerpo
+        # La distancia entre el high y el close no debe superar la tolerancia
+        distancia = row['high'] - row['close']
+        return distancia <= limite_tolerancia
     else:
-        # Es válido si la mecha inferior no es más grande que el cuerpo
-        return mecha_inf <= cuerpo
+        # La distancia entre el close y el low no debe superar la tolerancia
+        distancia = row['close'] - row['low']
+        return distancia <= limite_tolerancia
 
 # --- 1. HAMMER (MARTILLO HUMANIZADO) ---
 def es_hammer_nison(df, idx):
@@ -319,16 +318,15 @@ def es_hammer_nison(df, idx):
     cuerpo, m_sup, m_inf, rango, top, bottom = calcular_cuerpo_mechas(vela_martillo)
     if cuerpo == 0: cuerpo = 0.0001
     
-    # HUMANIZADO: 1.5x es suficiente a simple vista para ser un martillo.
-    condicion_mecha_larga = m_inf >= (1.5 * cuerpo)
+    # HUMANIZADO: Con que la mecha sea un poco más grande que el cuerpo (1.2x) es suficiente.
+    condicion_mecha_larga = m_inf >= (1.2 * cuerpo)
     
-    # HUMANIZADO: La mecha superior debe ser pequeña, pero no exigimos que sea 0.
-    # Solo pedimos que la mecha inferior sea claramente la dominante.
-    condicion_sin_mecha_arriba = m_sup < (m_inf * 0.3)
+    # HUMANIZADO: La mecha de arriba puede existir, siempre que no sea más grande que la mitad de la de abajo.
+    condicion_sin_mecha_arriba = m_sup <= (m_inf * 0.6)
     
     forma_valida = condicion_mecha_larga and condicion_sin_mecha_arriba
     
-    # Confirmación: La vela actual cerró en positivo y por encima del cuerpo del martillo
+    # HUMANIZADO Confirmación: Que la vela actual sea verde y cierre por encima del cuerpo del martillo.
     confirmacion_alcista = (vela_confirmacion['close'] > vela_confirmacion['open']) and (vela_confirmacion['close'] > top)
     
     if forma_valida and confirmacion_alcista:
@@ -343,20 +341,22 @@ def es_shooting_star_nison(df, idx):
     cuerpo, m_sup, m_inf, rango, top, bottom = calcular_cuerpo_mechas(vela_estrella)
     if cuerpo == 0: cuerpo = 0.0001
     
-    # HUMANIZADO: Mecha superior visiblemente dominante
-    condicion_mecha_larga = m_sup >= (1.5 * cuerpo)
-    condicion_sin_mecha_abajo = m_inf < (m_sup * 0.3)
+    # HUMANIZADO: Mecha superior 1.2x el cuerpo
+    condicion_mecha_larga = m_sup >= (1.2 * cuerpo)
+    
+    # HUMANIZADO: Mecha inferior permitida, pero menor a la mitad de la superior
+    condicion_sin_mecha_abajo = m_inf <= (m_sup * 0.6)
     
     forma_valida = condicion_mecha_larga and condicion_sin_mecha_abajo
     
-    # Confirmación: Vela roja que cierra por debajo del cuerpo de la estrella
+    # HUMANIZADO Confirmación: Vela roja que cierre por debajo del cuerpo de la estrella
     confirmacion_bajista = (vela_confirmacion['close'] < vela_confirmacion['open']) and (vela_confirmacion['close'] < bottom)
     
     if forma_valida and confirmacion_bajista:
         return True
     return False
 
-# --- 3. BULLISH ENGULFING (ENVOLVENTE ALCISTA HUMANIZADA / CRYPTO) ---
+# --- 3. BULLISH ENGULFING (ENVOLVENTE ALCISTA HUMANIZADA) ---
 def es_bullish_engulfing_nison(df, idx):
     vela_previa = df.iloc[idx-1]
     vela_actual = df.iloc[idx]
@@ -370,16 +370,15 @@ def es_bullish_engulfing_nison(df, idx):
     cuerpo_previo, _, _, _, _, _ = calcular_cuerpo_mechas(vela_previa)
     cuerpo_actual, _, _, _, _, _ = calcular_cuerpo_mechas(vela_actual)
     
-    # HUMANIZADO CRYPTO: En Bitcoin 1m no hay gaps. Envolver significa que 
-    # la vela verde sea visualmente más grande y cierre por encima de la apertura roja.
+    # HUMANIZADO: No exigimos que la verde sea inmensamente más grande, 
+    # si la envuelve visualmente cerrando por encima de la apertura roja, está bien.
     condicion_envuelve = vela_actual['close'] > vela_previa['open']
-    condicion_cuerpo_mayor = cuerpo_actual > cuerpo_previo
     
-    if condicion_envuelve and condicion_cuerpo_mayor and cierre_fuerte(vela_actual, "alcista"):
+    if condicion_envuelve and cierre_fuerte(vela_actual, "alcista"):
         return True
     return False
 
-# --- 4. BEARISH ENGULFING (ENVOLVENTE BAJISTA HUMANIZADA / CRYPTO) ---
+# --- 4. BEARISH ENGULFING (ENVOLVENTE BAJISTA HUMANIZADA) ---
 def es_bearish_engulfing_nison(df, idx):
     vela_previa = df.iloc[idx-1]
     vela_actual = df.iloc[idx]
@@ -393,11 +392,10 @@ def es_bearish_engulfing_nison(df, idx):
     cuerpo_previo, _, _, _, _, _ = calcular_cuerpo_mechas(vela_previa)
     cuerpo_actual, _, _, _, _, _ = calcular_cuerpo_mechas(vela_actual)
     
-    # HUMANIZADO CRYPTO: Cierra por debajo de la apertura previa y el cuerpo es mayor
+    # HUMANIZADO: Cierre por debajo de la apertura de la vela verde
     condicion_envuelve = vela_actual['close'] < vela_previa['open']
-    condicion_cuerpo_mayor = cuerpo_actual > cuerpo_previo
     
-    if condicion_envuelve and condicion_cuerpo_mayor and cierre_fuerte(vela_actual, "bajista"):
+    if condicion_envuelve and cierre_fuerte(vela_actual, "bajista"):
         return True
     return False
 
@@ -412,18 +410,16 @@ def es_piercing_nison(df, idx):
     if not (es_previa_roja and es_actual_verde):
         return False
         
-    # HUMANIZADO CRYPTO: En lugar de un gap por debajo del mínimo, 
-    # exigimos que la vela arranque desde abajo (abriendo igual o menor al cierre anterior)
-    condicion_apertura_baja = vela_actual['open'] <= vela_previa['close']
+    # HUMANIZADO: El ojo humano detecta un Piercing si recupera un 35% de la vela anterior.
+    rango_cuerpo_rojo = vela_previa['open'] - vela_previa['close']
+    umbral_penetracion = vela_previa['close'] + (rango_cuerpo_rojo * 0.35)
     
-    # Regla de penetración: empuja más allá de la mitad del cuerpo rojo
-    mitad_cuerpo_previo = (vela_previa['open'] + vela_previa['close']) / 2
-    condicion_penetra_mitad = vela_actual['close'] > mitad_cuerpo_previo
+    condicion_penetra = vela_actual['close'] >= umbral_penetracion
     
-    # No envuelve totalmente
-    condicion_no_envuelve = vela_actual['close'] <= vela_previa['open']
+    # HUMANIZADO: Arranca desde abajo (o desde el mismo cierre anterior)
+    condicion_apertura_baja = vela_actual['open'] <= (vela_previa['close'] + (rango_cuerpo_rojo * 0.15))
     
-    if condicion_apertura_baja and condicion_penetra_mitad and condicion_no_envuelve and cierre_fuerte(vela_actual, "alcista"):
+    if condicion_apertura_baja and condicion_penetra and cierre_fuerte(vela_actual, "alcista"):
         return True
     return False
 
@@ -438,15 +434,15 @@ def es_dark_cloud_nison(df, idx):
     if not (es_previa_verde and es_actual_roja):
         return False
     
-    # HUMANIZADO CRYPTO: Abre en el techo (igual o mayor al cierre anterior)
-    condicion_apertura_alta = vela_actual['open'] >= vela_previa['close']
+    # HUMANIZADO: Recupera al menos el 35% de la subida previa
+    rango_cuerpo_verde = vela_previa['close'] - vela_previa['open']
+    umbral_penetracion = vela_previa['close'] - (rango_cuerpo_verde * 0.35)
     
-    mitad_cuerpo_previo = (vela_previa['open'] + vela_previa['close']) / 2
-    condicion_penetra_mitad = vela_actual['close'] < mitad_cuerpo_previo
+    condicion_penetra = vela_actual['close'] <= umbral_penetracion
     
-    condicion_no_envuelve = vela_actual['close'] >= vela_previa['open']
+    condicion_apertura_alta = vela_actual['open'] >= (vela_previa['close'] - (rango_cuerpo_verde * 0.15))
     
-    if condicion_apertura_alta and condicion_penetra_mitad and condicion_no_envuelve and cierre_fuerte(vela_actual, "bajista"):
+    if condicion_apertura_alta and condicion_penetra and cierre_fuerte(vela_actual, "bajista"):
         return True
     return False
 
@@ -462,14 +458,14 @@ def es_morning_star_nison(df, idx):
     c1_body, _, _, _, _, _ = calcular_cuerpo_mechas(c1)
     c2_body, _, _, _, _, _ = calcular_cuerpo_mechas(c2)
     
-    # HUMANIZADO: La estrella debe ser un cuerpo pequeño comparado a la vela roja inicial
-    condicion_cuerpo_diminuto = c2_body < (c1_body * 0.4)
+    # HUMANIZADO: La estrella puede ser una vela promedio, hasta 60% del cuerpo anterior
+    condicion_cuerpo_flexible = c2_body <= (c1_body * 0.6)
     
-    # Penetración profunda de C3
-    mitad_c1 = (c1['open'] + c1['close']) / 2
-    condicion_penetracion = c3['close'] > mitad_c1
+    # HUMANIZADO: Penetración del 35%
+    umbral_penetracion = c1['close'] + (c1_body * 0.35)
+    condicion_penetracion = c3['close'] >= umbral_penetracion
     
-    if condicion_cuerpo_diminuto and condicion_penetracion and cierre_fuerte(c3, "alcista"):
+    if condicion_cuerpo_flexible and condicion_penetracion and cierre_fuerte(c3, "alcista"):
         return True
     return False
 
@@ -485,12 +481,14 @@ def es_evening_star_nison(df, idx):
     c1_body, _, _, _, _, _ = calcular_cuerpo_mechas(c1)
     c2_body, _, _, _, _, _ = calcular_cuerpo_mechas(c2)
     
-    condicion_cuerpo_diminuto = c2_body < (c1_body * 0.4)
+    # HUMANIZADO: Estrella permitida hasta 60%
+    condicion_cuerpo_flexible = c2_body <= (c1_body * 0.6)
     
-    mitad_c1 = (c1['open'] + c1['close']) / 2
-    condicion_penetracion = c3['close'] < mitad_c1
+    # HUMANIZADO: Penetración del 35%
+    umbral_penetracion = c1['close'] - (c1_body * 0.35)
+    condicion_penetracion = c3['close'] <= umbral_penetracion
     
-    if condicion_cuerpo_diminuto and condicion_penetracion and cierre_fuerte(c3, "bajista"):
+    if condicion_cuerpo_flexible and condicion_penetracion and cierre_fuerte(c3, "bajista"):
         return True
     return False
 
@@ -498,13 +496,13 @@ def es_evening_star_nison(df, idx):
 def es_tweezer_bottom_nison(df, idx):
     c1, c2 = df.iloc[idx-1], df.iloc[idx]
     
-    # HUMANIZADO: Tolerancia visual basada en el ATR, un trader no mide centavos
+    # HUMANIZADO: Tolerancia súper visual (0.35 ATR es un buen rango de "zona")
     atr_actual = df['atr'].iloc[idx]
-    tolerancia = atr_actual * 0.15 
+    tolerancia = atr_actual * 0.35 
     
     mismos_minimos = abs(c2['low'] - c1['low']) <= tolerancia
     
-    # La vela 2 debe reaccionar fuerte al alza
+    # Cierre en verde fuerte
     es_c2_verde = c2['close'] > c2['open']
     
     if mismos_minimos and es_c2_verde and cierre_fuerte(c2, "alcista"):
@@ -516,7 +514,7 @@ def es_tweezer_top_nison(df, idx):
     c1, c2 = df.iloc[idx-1], df.iloc[idx]
     
     atr_actual = df['atr'].iloc[idx]
-    tolerancia = atr_actual * 0.15
+    tolerancia = atr_actual * 0.35
     
     mismos_maximos = abs(c2['high'] - c1['high']) <= tolerancia
     
@@ -531,17 +529,19 @@ def es_three_white_soldiers(df, idx):
     if idx < 2: return False
     c1, c2, c3 = df.iloc[idx-2], df.iloc[idx-1], df.iloc[idx]
     
-    # RSI Humano: Si ya estamos en 75, comprar es un suicidio. Tiene que arrancar desde abajo.
+    # HUMANIZADO RSI: Evitamos entrar si el RSI está en la luna (> 75)
     rsi_actual = df['rsi'].iloc[idx]
-    if rsi_actual > 65: return False
+    if rsi_actual > 75: return False
     
     es_c1_verde = c1['close'] > c1['open']
     es_c2_verde = c2['close'] > c2['open']
     es_c3_verde = c3['close'] > c3['open']
     
     if es_c1_verde and es_c2_verde and es_c3_verde:
-        # En crypto, una escalada de 3 velas fuertes consecutivas es suficiente
-        if cierre_fuerte(c1, "alcista") and cierre_fuerte(c2, "alcista") and cierre_fuerte(c3, "alcista"):
+        # HUMANIZADO: Con que el cierre vaya subiendo consecutivamente, es suficiente para el ojo
+        subida_escalonada = (c2['close'] > c1['close']) and (c3['close'] > c2['close'])
+        
+        if subida_escalonada and cierre_fuerte(c2, "alcista") and cierre_fuerte(c3, "alcista"):
             return True
     return False
 
@@ -550,14 +550,18 @@ def es_three_black_crows(df, idx):
     if idx < 2: return False
     c1, c2, c3 = df.iloc[idx-2], df.iloc[idx-1], df.iloc[idx]
     
-    # RSI Humano: No vender en pánico cuando ya está sobrevendido.
+    # HUMANIZADO RSI: Evitamos vender si el RSI está hundido (< 25)
+    rsi_actual = df['rsi'].iloc[idx]
+    if rsi_actual < 25: return False
     
     es_c1_roja = c1['close'] < c1['open']
     es_c2_roja = c2['close'] < c2['open']
     es_c3_roja = c3['close'] < c3['open']
     
     if es_c1_roja and es_c2_roja and es_c3_roja:
-        if cierre_fuerte(c1, "bajista") and cierre_fuerte(c2, "bajista") and cierre_fuerte(c3, "bajista"):
+        bajada_escalonada = (c2['close'] < c1['close']) and (c3['close'] < c2['close'])
+        
+        if bajada_escalonada and cierre_fuerte(c2, "bajista") and cierre_fuerte(c3, "bajista"):
             return True
     return False
 
@@ -570,15 +574,14 @@ def detectar_patron_nison(df, soporte, resistencia):
     precio_actual = df['close'].iloc[idx]
     atr_actual = df['atr'].iloc[idx]
     
-    # 1. ¿Cómo viene el precio?
+    # 1. Microtendencia visual
     tendencia_previa = tendencia_previa_micro(df, idx)
     
-    # 2. ¿Estamos en una zona relevante?
-    # Tolerancia humana: Un soporte no es una línea, es una zona de varios dólares.
+    # 2. Tolerancia humana para zonas de soporte/resistencia (Un colchón amplio)
     tolerancia_zona = atr_actual * 2.0
     
-    en_soporte = cerca_de_nivel(precio_actual, soporte, tolerancia_zona)  # informativo
-    en_resistencia = cerca_de_nivel(precio_actual, resistencia, tolerancia_zona)  # informativo
+    en_soporte = cerca_de_nivel(precio_actual, soporte, tolerancia_zona) 
+    en_resistencia = cerca_de_nivel(precio_actual, resistencia, tolerancia_zona) 
     
     # --- PATRONES DE COMPRA ---
     if tendencia_previa == "bajista":
@@ -676,7 +679,7 @@ def generar_grafico_entrada(df, decision, soporte, resistencia, slope, intercept
         
         ax.text(0.02, 0.98, texto_panel, transform=ax.transAxes, fontsize=11, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.85))
 
-        ax.set_title(f"BOT V91.0 - BTCUSDT - Entrada {decision} Humanizada")
+        ax.set_title(f"BOT V91.1 - BTCUSDT - Entrada {decision} Humanizada")
         ax.grid(True, alpha=0.2)
         plt.tight_layout()
         
@@ -729,7 +732,7 @@ def generar_grafico_salida(df, trade_data):
         texto_panel_salida = f"CIERRE DE OPERACIÓN {decision_original}\nMotivo de Salida: {motivo_cierre}\nResultado PnL: {pnl_obtenido:.4f} USD\nNuevo Balance: {balance_actual:.2f} USD"
         ax.text(0.02, 0.95, texto_panel_salida, transform=ax.transAxes, fontsize=12, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
 
-        ax.set_title(f"BOT V91.0 - DETALLE DE CIERRE - {texto_resultado}")
+        ax.set_title(f"BOT V91.1 - DETALLE DE CIERRE - {texto_resultado}")
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
         
@@ -989,10 +992,8 @@ def risk_management_check():
 
 
 # ======================================================
-# SISTEMA SECUNDARIO INSTITUCIONAL (RESTAURADO COMPLETO)
+# SISTEMA SECUNDARIO INSTITUCIONAL
 # ======================================================
-# Este sistema evalúa métricas avanzadas y BOS externos
-# sin entrometerse en la lógica purista de Nison principal.
 
 class InstitutionalStats:
     def __init__(self):
@@ -1001,7 +1002,7 @@ class InstitutionalStats:
         self.losses = 0
         self.partial_wins = 0
         self.total_rr = 0.0
-        self.equity_curve = []
+        self.equity_curve =[]
         self.trade_log =[]
 
     def register_trade(self, result_rr, partial=False):
@@ -1188,7 +1189,7 @@ class InstitutionalSecondarySystem:
 # ======================================================
 
 def run_bot():
-    mensaje_inicio = "🤖 BOT V91.0 BYBIT REAL INICIADO.\nConfiguración Nison HUMANIZADA habilitada.\nTrailing Dinámico Infinito Online.\nSistema Institucional Paralelo Operativo."
+    mensaje_inicio = "🤖 BOT V91.1 BYBIT REAL INICIADO.\nConfiguración Nison SUPER HUMANIZADA habilitada.\nTrailing Dinámico Infinito Online.\nSistema Institucional Paralelo Operativo."
     telegram_mensaje(mensaje_inicio)
 
     # Inyección de módulos paralelos
@@ -1216,13 +1217,20 @@ def run_bot():
 
             decision_final = decision_cruda
 
-            # 4. Filtro Supremo Macro (DESACTIVADO - solo informativo)
+            # 4. Filtro Supremo Macro
+            if decision_final == "Buy":
+                if tendencia_macro == '📉 BAJISTA': 
+                    decision_final = None 
+                    
+            if decision_final == "Sell":
+                if tendencia_macro == '📈 ALCISTA': 
+                    decision_final = None 
 
             # 5. Registro Consola
             if patron_detectado == True:
-                lista_log = [nombre_patron]
+                lista_log =[nombre_patron]
             else:
-                lista_log = ["Buscando patrón Nison válido..."]
+                lista_log =["Buscando patrón Nison válido..."]
                 
             log_colab(df, tendencia_macro, slope, soporte, resistencia, decision_final, lista_log)
 

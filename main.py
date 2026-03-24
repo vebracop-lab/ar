@@ -1,13 +1,13 @@
-# BOT TRADING V91.6 BYBIT REAL – PRODUCCIÓN (SIN PROXY) 
+# BOT TRADING V91.7 BYBIT REAL – PRODUCCIÓN (SIN PROXY) 
 # ======================================================
 # ⚠️ KEYS INCLUIDAS TAL CUAL (SEGÚN PEDIDO)
 # Diseñado para FUTUROS PERPETUOS BTCUSDT en Bybit
 # ======================================================
-# NOVEDADES V91.6 (BUGFIX CRÍTICO DE PNL):
-# - Solucionado el error 'UnboundLocalError: pnl_parcial'. Se agregó 
-#   memoria global para almacenar las ganancias del TP1 parcial.
+# NOVEDADES V91.7 (SNIPER ZONES):
+# - FIX: Soportes y Resistencias mucho más estrictos y pegados al nivel.
+# - Tolerancia reducida a 1.5x ATR o un mínimo de 80 USD.
+# - El bot solo operará patrones que "besen" la línea de S/R real.
 # - Simulación financiera estricta: Apalancamiento 10x y Riesgo 2%.
-# - Nison Humanizado y Trailing Stop Infinito integrados.
 # - CÓDIGO 100% EXPANDIDO SIN RECORTES.
 # ======================================================
 
@@ -33,7 +33,7 @@ plt.rcParams['figure.figsize'] = (12, 6)
 GRAFICO_VELAS_LIMIT = 120
 MOSTRAR_EMA20 = True
 MOSTRAR_ATR = False
-MARGEN_NIVEL_BASE = 150  # Mínimo de dólares de tolerancia para S/R
+MARGEN_NIVEL_BASE = 80  # Mínimo de dólares de tolerancia para S/R ajustado
 
 def cerca_de_nivel(precio, nivel, margen):
     distancia = abs(precio - nivel)
@@ -70,7 +70,7 @@ PAPER_TP2 = None
 PAPER_PARTIAL_ACTIVADO = False
 PAPER_SIZE_BTC_RESTANTE = 0.0
 PAPER_TP1_EJECUTADO = False
-PAPER_PNL_PARCIAL = 0.0  # <--- FIX CRITICO: Memoria de PnL Parcial
+PAPER_PNL_PARCIAL = 0.0  
 PAPER_ULTIMO_RESULTADO = None
 PAPER_ULTIMO_PNL = 0.0
 PAPER_WIN = 0
@@ -309,6 +309,7 @@ def es_hammer_nison(df, idx):
     condicion_sin_mecha_arriba = m_sup <= (m_inf * 0.8) 
     
     forma_valida = condicion_mecha_larga and condicion_sin_mecha_arriba
+    
     confirmacion_alcista = vela_confirmacion['close'] > vela_confirmacion['open'] 
     
     if forma_valida and confirmacion_alcista:
@@ -327,6 +328,7 @@ def es_shooting_star_nison(df, idx):
     condicion_sin_mecha_abajo = m_inf <= (m_sup * 0.8)
     
     forma_valida = condicion_mecha_larga and condicion_sin_mecha_abajo
+    
     confirmacion_bajista = vela_confirmacion['close'] < vela_confirmacion['open'] 
     
     if forma_valida and confirmacion_bajista:
@@ -529,7 +531,8 @@ def detectar_patron_nison(df, soporte, resistencia, idx=-2):
     
     tendencia_previa = tendencia_previa_micro(df, idx)
     
-    tolerancia_zona = max(atr_actual * 3.5, 150)
+    # V91.7: Tolerancia ajustada a 1.5x ATR o un mínimo de 80 dólares (ZONA SNIPER)
+    tolerancia_zona = max(atr_actual * 1.5, 80)
     
     en_soporte = cerca_de_nivel(min_patron, soporte, tolerancia_zona) 
     en_resistencia = cerca_de_nivel(max_patron, resistencia, tolerancia_zona) 
@@ -631,12 +634,11 @@ def generar_grafico_entrada(df, decision, soporte, resistencia, slope, intercept
         rsi_actual = df['rsi'].iloc[-2]
         texto_razones = "\n".join(razones)
         
-        # TEXTO SIN EMOJIS PARA MATPLOTLIB
         texto_panel = f"OPERACION: {decision.upper()}\nPrecio: {df['close'].iloc[-1]:.2f}\nRSI Contexto: {rsi_actual:.1f}\n\nRazones:\n{texto_razones}"
         
         ax.text(0.02, 0.98, texto_panel, transform=ax.transAxes, fontsize=11, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.85))
 
-        ax.set_title(f"BOT V91.6 - BTCUSDT - Entrada {decision} Scalper")
+        ax.set_title(f"BOT V91.7 - BTCUSDT - Entrada {decision} Sniper")
         ax.grid(True, alpha=0.2)
         plt.tight_layout()
         
@@ -678,18 +680,18 @@ def generar_grafico_salida(df, trade_data):
         if pnl_obtenido > 0:
             color_marcador = 'lime'
             forma_marcador = '^'
-            texto_resultado = "GANADA (+)"  # Sin emoji
+            texto_resultado = "GANADA (+)"  
         else:
             color_marcador = 'red'
             forma_marcador = 'v'
-            texto_resultado = "PERDIDA (-)" # Sin emoji
+            texto_resultado = "PERDIDA (-)" 
             
         ax.scatter([indice_salida_x],[salida_price], s=200, c=color_marcador, marker=forma_marcador, edgecolors='black', zorder=5)
 
         texto_panel_salida = f"CIERRE DE OPERACION {decision_original}\nMotivo de Salida: {motivo_cierre}\nResultado PnL: {pnl_obtenido:.4f} USD\nNuevo Balance: {balance_actual:.2f} USD"
         ax.text(0.02, 0.95, texto_panel_salida, transform=ax.transAxes, fontsize=12, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
 
-        ax.set_title(f"BOT V91.6 - DETALLE DE CIERRE - {texto_resultado}")
+        ax.set_title(f"BOT V91.7 - DETALLE DE CIERRE - {texto_resultado}")
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
         
@@ -723,7 +725,7 @@ def log_colab(df, tendencia, slope, soporte, resistencia, decision, razones, log
     print("="*100)
 
 # ======================================================
-# MOTOR FINANCIERO Y GESTIÓN (V91.6 REALISTIC TRACKER)
+# MOTOR FINANCIERO Y GESTIÓN (V91.7 REALISTIC TRACKER)
 # ======================================================
 
 def paper_abrir_posicion(decision, precio, atr, soporte, resistencia, razones, tiempo):
@@ -982,7 +984,7 @@ class InstitutionalStats:
         self.losses = 0
         self.partial_wins = 0
         self.total_rr = 0.0
-        self.equity_curve = []
+        self.equity_curve =[]
         self.trade_log =[]
 
     def register_trade(self, result_rr, partial=False):
@@ -1169,7 +1171,7 @@ class InstitutionalSecondarySystem:
 # ======================================================
 
 def run_bot():
-    mensaje_inicio = "🤖 BOT V91.6 BYBIT REAL INICIADO.\nSimulación Realista de $100 (2% Riesgo / 10x Lev) en marcha.\nTrailing Dinámico Infinito Online."
+    mensaje_inicio = "🤖 BOT V91.7 BYBIT REAL INICIADO.\nConfiguración SNIPER ZONES habilitada.\nTrailing Dinámico Infinito Online."
     telegram_mensaje(mensaje_inicio)
 
     sistema_institucional = InstitutionalSecondarySystem(telegram_mensaje)
@@ -1205,7 +1207,6 @@ def run_bot():
 
             # 6. Toma de Decisión y Ejecución
             if decision_final is not None:
-                # Quitamos emojis para evitar crasheos de Matplotlib
                 razones_para_entrar.append(f"Arquitectura Confirmada: {nombre_patron}")
                 razones_para_entrar.append(f"Geometria de S/R Respetada y Validada")
                 

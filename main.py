@@ -569,7 +569,10 @@ def detectar_patron_nison(df, soporte, resistencia, idx=-2):
         if es_evening_star_nison(df, idx): return True, "Sell", "Nison Evening Star", log_zonas
         if es_tweezer_top_nison(df, idx): return True, "Sell", "Nison Tweezer Tops", log_zonas
         if es_three_black_crows(df, idx): return True, "Sell", "Three Black Crows", log_zonas
-            # ======================================================
+
+    return False, None, None, log_zonas
+
+# ======================================================
 # GRÁFICOS MATPLOTLIB (SIN EMOJIS PARA EVITAR WARNINGS)
 # ======================================================
 
@@ -1259,5 +1262,3 @@ def run_bot():
 
 if __name__ == '__main__':
     run_bot()
-
-    return False, None, None, log_zonas

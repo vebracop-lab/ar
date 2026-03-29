@@ -1,14 +1,13 @@
-# BOT TRADING V92.2 BYBIT REAL – PRODUCCIÓN (SIN PROXY) 
+# BOT TRADING V92.3 BYBIT REAL – PRODUCCIÓN (SIN PROXY) 
 # ======================================================
 # ⚠️ KEYS INCLUIDAS TAL CUAL (SEGÚN PEDIDO)
 # Diseñado para FUTUROS PERPETUOS BTCUSDT en Bybit
 # ======================================================
-# NOVEDADES V92.2 (5m SNIPER PRO):
-# - Temporalidad ajustada a 5 MINUTOS (INTERVAL = "5").
-# - Sistema Anti-Spam incorporado: Bloquea la vela operada para no abrir 
-#   5 trades duplicados, mientras sigue revisando SL/TP cada 60 segundos.
-# - Soportes y Macro-Tendencias escalan armónicamente al nuevo timeframe.
-# - Tolerancia reducida a 1.5x ATR o un mínimo de 80 USD (Sniper Zones).
+# NOVEDADES V92.3 (FINANCIAL ENGINE FIX):
+# - Solucionado el R/R negativo (Arriesgar 2 para ganar 1).
+# - Nuevos Multiplicadores: SL=1.2 ATR | TP1=2.0 ATR | Trailing=1.5 ATR.
+# - El bot ahora exige que la ganancia supere la pérdida matemáticamente.
+# - Temporalidad de 5 MINUTOS y Anti-Spam de vela activos.
 # - CÓDIGO 100% EXPANDIDO SIN RECORTES.
 # ======================================================
 
@@ -44,11 +43,17 @@ def cerca_de_nivel(precio, nivel, margen):
         return False
 
 SYMBOL = "BTCUSDT"
-INTERVAL = "5"  # <--- TEMPORALIDAD DE 5 MINUTOS APLICADA
+INTERVAL = "5"  
 # Ajustes Financieros Realistas para cuenta de $100
 RISK_PER_TRADE = 0.02  # 2% de riesgo por trade ($2.00 USD)
 LEVERAGE = 10          # 10x de apalancamiento (Poder de compra de $1000)
-SLEEP_SECONDS = 60     # Se mantiene en 60s para revisar Trailing Stop en tiempo real
+SLEEP_SECONDS = 60     
+
+# MULTIPLICADORES DE RIESGO/BENEFICIO (NUEVO MOTOR V92.3)
+MULT_SL = 1.2          # Distancia del Stop Loss inicial
+MULT_TP1 = 2.0         # Distancia del Take Profit 1
+MULT_TRAILING = 1.5    # Distancia del Trailing Stop para dejar correr la tendencia
+PORCENTAJE_CIERRE = 0.5 # Cerramos el 50% en TP1
 
 # ======================================================
 # PAPER TRADING (ESTADO DE CUENTA)
@@ -229,14 +234,12 @@ def calcular_indicadores(df):
     return df_limpio
 
 def detectar_soportes_resistencias(df, idx=-2):
-    # En 5m, 40 velas = 200 minutos (3.3 horas, excelente zona intradía)
     df_eval = df.iloc[:idx+1]
     soporte = df_eval['low'].rolling(40).min().iloc[-1]
     resistencia = df_eval['high'].rolling(40).max().iloc[-1]
     return soporte, resistencia
 
 def detectar_tendencia_macro(df, idx=-2, ventana=120):
-    # En 5m, 120 velas = 10 horas de tendencia macro
     df_eval = df.iloc[:idx+1]
     if len(df_eval) < ventana:
         y = df_eval['close'].values
@@ -279,7 +282,6 @@ def calcular_cuerpo_mechas(row):
     return cuerpo, mecha_sup, mecha_inf, rango, top, bottom
 
 def tendencia_previa_micro(df, idx, velas=6):
-    # 6 velas en 5m son 30 minutos de movimiento previo
     if idx - velas < 0: 
         return "neutral"
         
@@ -535,7 +537,7 @@ def detectar_patron_nison(df, soporte, resistencia, idx=-2):
     
     tendencia_previa = tendencia_previa_micro(df, idx)
     
-    # En 5m, mantenemos tolerancia Sniper (1.5x ATR o mínimo 80 dólares)
+    # Tolerancia ajustada a 1.5x ATR o un mínimo de 80 dólares (ZONA SNIPER)
     tolerancia_zona = max(atr_actual * 1.5, 80)
     
     en_soporte = cerca_de_nivel(min_patron, soporte, tolerancia_zona) 
@@ -567,9 +569,7 @@ def detectar_patron_nison(df, soporte, resistencia, idx=-2):
         if es_evening_star_nison(df, idx): return True, "Sell", "Nison Evening Star", log_zonas
         if es_tweezer_top_nison(df, idx): return True, "Sell", "Nison Tweezer Tops", log_zonas
         if es_three_black_crows(df, idx): return True, "Sell", "Three Black Crows", log_zonas
-
-    return False, None, None, log_zonas
-# ======================================================
+            # ======================================================
 # GRÁFICOS MATPLOTLIB (SIN EMOJIS PARA EVITAR WARNINGS)
 # ======================================================
 
@@ -640,7 +640,7 @@ def generar_grafico_entrada(df, decision, soporte, resistencia, slope, intercept
         
         ax.text(0.02, 0.98, texto_panel, transform=ax.transAxes, fontsize=11, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.85))
 
-        ax.set_title(f"BOT V92.2 - BTCUSDT - Entrada {decision} (5 Minutos)")
+        ax.set_title(f"BOT V92.3 - BTCUSDT - Entrada {decision} (5 Minutos)")
         ax.grid(True, alpha=0.2)
         plt.tight_layout()
         
@@ -693,7 +693,7 @@ def generar_grafico_salida(df, trade_data):
         texto_panel_salida = f"CIERRE DE OPERACION {decision_original}\nMotivo de Salida: {motivo_cierre}\nResultado PnL: {pnl_obtenido:.4f} USD\nNuevo Balance: {balance_actual:.2f} USD"
         ax.text(0.02, 0.95, texto_panel_salida, transform=ax.transAxes, fontsize=12, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
 
-        ax.set_title(f"BOT V92.2 - DETALLE DE CIERRE - {texto_resultado}")
+        ax.set_title(f"BOT V92.3 - DETALLE DE CIERRE - {texto_resultado}")
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
         
@@ -727,7 +727,7 @@ def log_colab(df, tendencia, slope, soporte, resistencia, decision, razones, log
     print("="*100)
 
 # ======================================================
-# MOTOR FINANCIERO Y GESTIÓN (V92.2 REALISTIC TRACKER)
+# MOTOR FINANCIERO Y GESTIÓN (V92.3 R/R CORREGIDO)
 # ======================================================
 
 def paper_abrir_posicion(decision, precio, atr, soporte, resistencia, razones, tiempo):
@@ -747,15 +747,16 @@ def paper_abrir_posicion(decision, precio, atr, soporte, resistencia, razones, t
     if PAPER_POSICION_ACTIVA is not None: 
         return False
 
-    # El riesgo que estamos dispuestos a asumir ($100 * 2% = $2.00 USD perdidos si toca SL)
     riesgo_usd = PAPER_BALANCE * RISK_PER_TRADE
     
+    # V92.3: Implementamos R/R positivo.
+    # El SL está a 1.2 ATR de distancia. El TP1 está a 2.0 ATR de distancia.
     if decision == "Buy":
-        sl = precio - atr 
-        tp1 = precio + atr 
+        sl = precio - (atr * MULT_SL)
+        tp1 = precio + (atr * MULT_TP1)
     elif decision == "Sell":
-        sl = precio + atr 
-        tp1 = precio - atr 
+        sl = precio + (atr * MULT_SL)
+        tp1 = precio - (atr * MULT_TP1)
     else:
         return False
     
@@ -763,11 +764,9 @@ def paper_abrir_posicion(decision, precio, atr, soporte, resistencia, razones, t
     if distancia_riesgo == 0: 
         return False
 
-    # Calculamos cuántos BTC compraríamos para que la caída al SL sea exactamente $2.00 de pérdida
     size_en_cripto_ideal = riesgo_usd / distancia_riesgo
     size_en_dolares_ideal = size_en_cripto_ideal * precio
     
-    # ⚠️ VALIDADOR DE MARGEN Y APALANCAMIENTO ⚠️
     poder_de_compra_maximo = PAPER_BALANCE * LEVERAGE
     
     if size_en_dolares_ideal > poder_de_compra_maximo:
@@ -818,7 +817,6 @@ def paper_revisar_sl_tp(df):
     if PAPER_POSICION_ACTIVA is None: 
         return None
 
-    # El TP/SL se revisa en tiempo real con la vela actual (-1)
     high = df['high'].iloc[-1]
     low = df['low'].iloc[-1]
     close = df['close'].iloc[-1]
@@ -826,8 +824,6 @@ def paper_revisar_sl_tp(df):
     
     cerrar_total = False
     motivo = None
-    
-    TRAILING_MULT = 1.2 
 
     # ==========================
     # REVISIÓN DE COMPRAS (LONG)
@@ -835,19 +831,21 @@ def paper_revisar_sl_tp(df):
     if PAPER_POSICION_ACTIVA == "Buy":
         if PAPER_TP1_EJECUTADO == False:
             if high >= PAPER_TP1:
-                mitad_posicion = PAPER_SIZE_BTC / 2
-                PAPER_PNL_PARCIAL = (PAPER_TP1 - PAPER_PRECIO_ENTRADA) * mitad_posicion
+                # V92.3: Usar la variable de porcentaje de cierre
+                cantidad_a_cerrar = PAPER_SIZE_BTC * PORCENTAJE_CIERRE
+                PAPER_PNL_PARCIAL = (PAPER_TP1 - PAPER_PRECIO_ENTRADA) * cantidad_a_cerrar
                 
                 PAPER_BALANCE += PAPER_PNL_PARCIAL
                 PAPER_PNL_GLOBAL += PAPER_PNL_PARCIAL
-                PAPER_SIZE_BTC_RESTANTE = mitad_posicion
+                PAPER_SIZE_BTC_RESTANTE = PAPER_SIZE_BTC - cantidad_a_cerrar
                 PAPER_TP1_EJECUTADO = True
                 
                 PAPER_SL = PAPER_PRECIO_ENTRADA 
-                telegram_mensaje(f"🎯 TP1 ALCANZADO (+{PAPER_PNL_PARCIAL:.2f} USD). 50% cerrado, SL a Break Even. Iniciando Trailing...")
+                telegram_mensaje(f"🎯 TP1 ALCANZADO (+{PAPER_PNL_PARCIAL:.2f} USD). {PORCENTAJE_CIERRE*100}% cerrado, SL a Break Even. Iniciando Trailing...")
 
         if PAPER_TP1_EJECUTADO == True:
-            nuevo_sl_dinamico = close - (atr_actual * TRAILING_MULT)
+            # V92.3: Trailing Mult ahora es 1.5 ATR
+            nuevo_sl_dinamico = close - (atr_actual * MULT_TRAILING)
             if nuevo_sl_dinamico > PAPER_SL:
                 PAPER_SL = nuevo_sl_dinamico 
 
@@ -864,19 +862,19 @@ def paper_revisar_sl_tp(df):
     elif PAPER_POSICION_ACTIVA == "Sell":
         if PAPER_TP1_EJECUTADO == False:
             if low <= PAPER_TP1:
-                mitad_posicion = PAPER_SIZE_BTC / 2
-                PAPER_PNL_PARCIAL = (PAPER_PRECIO_ENTRADA - PAPER_TP1) * mitad_posicion
+                cantidad_a_cerrar = PAPER_SIZE_BTC * PORCENTAJE_CIERRE
+                PAPER_PNL_PARCIAL = (PAPER_PRECIO_ENTRADA - PAPER_TP1) * cantidad_a_cerrar
                 
                 PAPER_BALANCE += PAPER_PNL_PARCIAL
                 PAPER_PNL_GLOBAL += PAPER_PNL_PARCIAL
-                PAPER_SIZE_BTC_RESTANTE = mitad_posicion
+                PAPER_SIZE_BTC_RESTANTE = PAPER_SIZE_BTC - cantidad_a_cerrar
                 PAPER_TP1_EJECUTADO = True
                 
                 PAPER_SL = PAPER_PRECIO_ENTRADA 
-                telegram_mensaje(f"🎯 TP1 ALCANZADO (+{PAPER_PNL_PARCIAL:.2f} USD). 50% cerrado, SL a Break Even. Iniciando Trailing...")
+                telegram_mensaje(f"🎯 TP1 ALCANZADO (+{PAPER_PNL_PARCIAL:.2f} USD). {PORCENTAJE_CIERRE*100}% cerrado, SL a Break Even. Iniciando Trailing...")
 
         if PAPER_TP1_EJECUTADO == True:
-            nuevo_sl_dinamico = close + (atr_actual * TRAILING_MULT)
+            nuevo_sl_dinamico = close + (atr_actual * MULT_TRAILING)
             if nuevo_sl_dinamico < PAPER_SL:
                 PAPER_SL = nuevo_sl_dinamico 
 
@@ -987,7 +985,7 @@ class InstitutionalStats:
         self.losses = 0
         self.partial_wins = 0
         self.total_rr = 0.0
-        self.equity_curve = []
+        self.equity_curve =[]
         self.trade_log =[]
 
     def register_trade(self, result_rr, partial=False):
@@ -1170,60 +1168,49 @@ class InstitutionalSecondarySystem:
         self.logger.log_operacion_completa(trade_data)
 
 # ======================================================
-# LOOP PRINCIPAL (CON ANTI-SPAM 5m)
+# LOOP PRINCIPAL Y ANTI-SPAM
 # ======================================================
 
 def run_bot():
-    mensaje_inicio = "🤖 BOT V92.2 BYBIT REAL INICIADO.\nConfiguración 5 MINUTOS SNIPER PRO habilitada.\nTrailing Dinámico Infinito Online."
+    mensaje_inicio = "🤖 BOT V92.3 BYBIT REAL INICIADO.\nMejora de Riesgo/Beneficio (TP a 2 ATR) implementada.\nConfiguración 5 MINUTOS habilitada."
     telegram_mensaje(mensaje_inicio)
 
     sistema_institucional = InstitutionalSecondarySystem(telegram_mensaje)
     
-    # NUEVO: Memoria para no repetir operaciones en la misma vela de 5m
     ultima_vela_operada = None
 
     while True:
         time.sleep(SLEEP_SECONDS) 
         
         try:
-            # 1. Obtención de datos en vivo
             df_velas_crudas = obtener_velas()
             df = calcular_indicadores(df_velas_crudas)
 
-            # 2. Índice de evaluación
             idx_eval = -2
             precio_mercado_actual = df['close'].iloc[-1] 
             tiempo_vela_cerrada = df.index[-2] 
 
-            # 3. Análisis General
             slope, intercept, tendencia_macro = detectar_tendencia_macro(df, idx=idx_eval)
             soporte, resistencia = detectar_soportes_resistencias(df, idx=idx_eval)
             
             razones_para_entrar =[]
             
-            # Solo buscamos patrón si NO tenemos un trade activo
             if PAPER_POSICION_ACTIVA is None:
-                # 4. EL DETECTOR MAESTRO NISON 
                 patron_detectado, decision_final, nombre_patron, log_zonas = detectar_patron_nison(df, soporte, resistencia, idx=idx_eval)
 
-                # Sistema ANTI-SPAM
                 if ultima_vela_operada == tiempo_vela_cerrada:
                     decision_final = None
                     if patron_detectado:
                         lista_log =[f"Patrón {nombre_patron} bloqueado (Anti-Spam de vela 5m)"]
                         patron_detectado = False
-                    else:
-                        lista_log = ["Buscando patrón Nison CERRADO válido..."]
                 else:
                     if patron_detectado == True:
                         lista_log = [nombre_patron]
                     else:
                         lista_log = ["Buscando patrón Nison CERRADO válido..."]
                     
-                # 5. Registro Consola
                 log_colab(df, tendencia_macro, slope, soporte, resistencia, decision_final, lista_log, log_zonas, idx=idx_eval)
 
-                # 6. Toma de Decisión y Ejecución
                 if decision_final is not None:
                     razones_para_entrar.append(f"Arquitectura Confirmada: {nombre_patron}")
                     razones_para_entrar.append(f"Geometria de S/R Respetada y Validada")
@@ -1235,7 +1222,6 @@ def run_bot():
                         apertura_exitosa = paper_abrir_posicion(decision_final, precio_mercado_actual, atr_entrada, soporte, resistencia, razones_para_entrar, df.index[-1])
                         
                         if apertura_exitosa == True:
-                            # Bloqueamos esta vela para no abrir más en los próximos minutos
                             ultima_vela_operada = tiempo_vela_cerrada
                             
                             texto_entrada = f"📌 SE HA INICIADO UNA OPERACIÓN {decision_final.upper()} (5m)\n"
@@ -1256,7 +1242,6 @@ def run_bot():
                                 telegram_grafico(figura_generada)
                                 plt.close(figura_generada)
 
-            # 7. Gestión Contínua de Operaciones Abiertas (Usando datos en vivo, idx = -1)
             if PAPER_POSICION_ACTIVA is not None:
                 datos_del_cierre = paper_revisar_sl_tp(df)
                 
@@ -1274,3 +1259,5 @@ def run_bot():
 
 if __name__ == '__main__':
     run_bot()
+
+    return False, None, None, log_zonas

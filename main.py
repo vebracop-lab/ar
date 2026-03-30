@@ -1,14 +1,15 @@
-# BOT TRADING V92.4 BYBIT REAL – PRODUCCIÓN (SIN PROXY) 
+# BOT TRADING V93.0 BYBIT REAL – PRODUCCIÓN (SIN PROXY) 
 # ======================================================
 # ⚠️ KEYS INCLUIDAS TAL CUAL (SEGÚN PEDIDO)
 # Diseñado para FUTUROS PERPETUOS BTCUSDT en Bybit
 # ======================================================
-# NOVEDADES V92.4 (BALANCED SCALPER 5m):
-# - Configuración Equilibrada de Riesgo/Beneficio para absorber mechas:
-#   * SL = 1.5 ATR (Más espacio para respirar contra la volatilidad).
-#   * TP1 = 2.5 ATR (Mayor recorrido exigido para asegurar 50%).
-#   * Trailing = 2.0 ATR (Evita cierres prematuros por pullbacks normales).
-# - Temporalidad de 5 MINUTOS y Anti-Spam de vela activos.
+# NOVEDADES V93.0 (MULTI-ZONE NISON SNIPER):
+# - 12 Patrones Nison contextualizados humanamente (V92.4).
+# - ZONAS MÚLTIPLES: Ahora el bot opera patrones que rebotan en:
+#   1. Soportes/Resistencias Horizontales.
+#   2. EMA 20 (Medias Móviles).
+#   3. Canales de Regresión Lineal (Soportes Dinámicos).
+# - Simulación financiera estricta: Apalancamiento 10x y Riesgo 2%.
 # - CÓDIGO 100% EXPANDIDO SIN RECORTES.
 # ======================================================
 
@@ -50,11 +51,11 @@ RISK_PER_TRADE = 0.02  # 2% de riesgo por trade ($2.00 USD)
 LEVERAGE = 10          # 10x de apalancamiento (Poder de compra de $1000)
 SLEEP_SECONDS = 60     
 
-# MULTIPLICADORES DE RIESGO/BENEFICIO (NUEVO MOTOR V92.4 - EQUILIBRADO)
-MULT_SL = 1.5          # Le da a la vela más espacio para "respirar"
-MULT_TP1 = 2.5         # Exigimos un poco más de recorrido para pagar el riesgo
-MULT_TRAILING = 2.0    # Evita que un pullback normal de 5m te cierre el trade prematuramente
-PORCENTAJE_CIERRE = 0.5 # Cerramos el 50% en TP1
+# MULTIPLICADORES DE RIESGO/BENEFICIO (EQUILIBRADO)
+MULT_SL = 1.5          
+MULT_TP1 = 2.5         
+MULT_TRAILING = 2.0    
+PORCENTAJE_CIERRE = 0.5 
 
 # ======================================================
 # PAPER TRADING (ESTADO DE CUENTA)
@@ -240,7 +241,7 @@ def detectar_soportes_resistencias(df, idx=-2):
     resistencia = df_eval['high'].rolling(40).max().iloc[-1]
     return soporte, resistencia
 
-def detectar_tendencia_macro(df, idx=-2, ventana=120):
+def calcular_canal_regresion(df, idx=-2, ventana=120):
     df_eval = df.iloc[:idx+1]
     if len(df_eval) < ventana:
         y = df_eval['close'].values
@@ -248,18 +249,21 @@ def detectar_tendencia_macro(df, idx=-2, ventana=120):
         y = df_eval['close'].values[-ventana:]
         
     x = np.arange(len(y))
-    
     slope, intercept, r_value, p_value, std_err = linregress(x, y)
     
-    if slope > 0.01: 
-        tendencia = '📈 ALCISTA'
-    elif slope < -0.01: 
-        tendencia = '📉 BAJISTA'
-    else: 
-        tendencia = '➡️ LATERAL'
+    linea_central = intercept + slope * x
+    residuos = y - linea_central
+    desviacion = np.std(residuos)
+    
+    # El valor actual de la banda superior e inferior
+    canal_sup = linea_central[-1] + (desviacion * 1.5)
+    canal_inf = linea_central[-1] - (desviacion * 1.5)
+    
+    if slope > 0.01: tendencia = '📈 ALCISTA'
+    elif slope < -0.01: tendencia = '📉 BAJISTA'
+    else: tendencia = '➡️ LATERAL'
         
-    return slope, intercept, tendencia
-
+    return canal_sup, canal_inf, slope, intercept, tendencia
 
 # ======================================================
 # 🕯️ ARSENAL NISON (SÚPER HUMANIZADO)
@@ -526,7 +530,7 @@ def es_three_black_crows(df, idx):
             return True
     return False
 
-# === DETECTOR MAESTRO NISON ===
+# === DETECTOR MAESTRO NISON (CONFLUENCIAS DE MÚLTIPLES ZONAS) ===
 def detectar_patron_nison(df, soporte, resistencia, idx=-2):
     if len(df) < 15: 
         return False, None, None, {}
@@ -538,23 +542,51 @@ def detectar_patron_nison(df, soporte, resistencia, idx=-2):
     
     tendencia_previa = tendencia_previa_micro(df, idx)
     
-    # Tolerancia ajustada a 1.5x ATR o un mínimo de 80 dólares (ZONA SNIPER)
+    # Tolerancia estricta de 1.5x ATR
     tolerancia_zona = max(atr_actual * 1.5, 80)
     
-    en_soporte = cerca_de_nivel(min_patron, soporte, tolerancia_zona) 
-    en_resistencia = cerca_de_nivel(max_patron, resistencia, tolerancia_zona) 
+    # 1. EVALUACIÓN DE ZONAS HORIZONTALES TRADICIONALES
+    toca_soporte_horiz = cerca_de_nivel(min_patron, soporte, tolerancia_zona) 
+    toca_resistencia_horiz = cerca_de_nivel(max_patron, resistencia, tolerancia_zona) 
+    
+    # 2. EVALUACIÓN DE ZONAS DINÁMICAS (CANAL DE REGRESIÓN)
+    canal_sup, canal_inf, _, _, _ = calcular_canal_regresion(df, idx)
+    toca_soporte_dinamico = cerca_de_nivel(min_patron, canal_inf, tolerancia_zona)
+    toca_resistencia_dinamica = cerca_de_nivel(max_patron, canal_sup, tolerancia_zona)
+    
+    # 3. EVALUACIÓN DE MEDIA MÓVIL (EMA 20)
+    ema20_actual = df['ema20'].iloc[idx]
+    toca_ema20_soporte = cerca_de_nivel(min_patron, ema20_actual, tolerancia_zona) and (df['close'].iloc[idx] > ema20_actual)
+    toca_ema20_resistencia = cerca_de_nivel(max_patron, ema20_actual, tolerancia_zona) and (df['close'].iloc[idx] < ema20_actual)
+    
+    # VALIDACIÓN FINAL DE ZONA (Basta con rebotar en UNA pared fuerte para que Nison valide el patrón)
+    en_zona_de_compra = toca_soporte_horiz or toca_soporte_dinamico or toca_ema20_soporte
+    en_zona_de_venta = toca_resistencia_horiz or toca_resistencia_dinamica or toca_ema20_resistencia
+    
+    # Identificar la zona exacta para el Log
+    zonas_activas_compra =[]
+    if toca_soporte_horiz: zonas_activas_compra.append("Soporte Horizontal (40m)")
+    if toca_soporte_dinamico: zonas_activas_compra.append("Soporte Dinámico (Canal Inferior)")
+    if toca_ema20_soporte: zonas_activas_compra.append("Media Móvil (EMA 20)")
+    
+    zonas_activas_venta =[]
+    if toca_resistencia_horiz: zonas_activas_venta.append("Resistencia Horizontal (40m)")
+    if toca_resistencia_dinamica: zonas_activas_venta.append("Resistencia Dinámica (Canal Superior)")
+    if toca_ema20_resistencia: zonas_activas_venta.append("Media Móvil Techo (EMA 20)")
     
     log_zonas = {
-        "min_patron": min_patron, "max_patron": max_patron,
-        "dist_soporte": abs(min_patron - soporte),
-        "dist_resistencia": abs(max_patron - resistencia),
+        "min_patron": min_patron, 
+        "max_patron": max_patron,
         "tolerancia": tolerancia_zona,
-        "en_soporte": en_soporte, "en_resistencia": en_resistencia,
+        "en_soporte": en_zona_de_compra, 
+        "en_resistencia": en_zona_de_venta,
+        "zonas_compra": ", ".join(zonas_activas_compra) if zonas_activas_compra else "Ninguna",
+        "zonas_venta": ", ".join(zonas_activas_venta) if zonas_activas_venta else "Ninguna",
         "micro_tendencia": tendencia_previa
     }
     
     # --- PATRONES DE COMPRA ---
-    if en_soporte:
+    if en_zona_de_compra:
         if es_hammer_nison(df, idx): return True, "Buy", "Nison Hammer", log_zonas
         if es_bullish_engulfing_nison(df, idx): return True, "Buy", "Nison Bullish Engulfing", log_zonas
         if es_piercing_nison(df, idx): return True, "Buy", "Nison Piercing Pattern", log_zonas
@@ -563,7 +595,7 @@ def detectar_patron_nison(df, soporte, resistencia, idx=-2):
         if es_three_white_soldiers(df, idx): return True, "Buy", "Three White Soldiers", log_zonas
 
     # --- PATRONES DE VENTA ---
-    if en_resistencia:
+    if en_zona_de_venta:
         if es_shooting_star_nison(df, idx): return True, "Sell", "Nison Shooting Star", log_zonas
         if es_bearish_engulfing_nison(df, idx): return True, "Sell", "Nison Bearish Engulfing", log_zonas
         if es_dark_cloud_nison(df, idx): return True, "Sell", "Nison Dark Cloud Cover", log_zonas
@@ -624,8 +656,12 @@ def generar_grafico_entrada(df, decision, soporte, resistencia, slope, intercept
         banda_superior = linea_tendencia + (desviacion * 1.5)
         banda_inferior = linea_tendencia - (desviacion * 1.5)
         
-        ax.plot(x_valores, banda_superior, linestyle='--', linewidth=2, color='red')
-        ax.plot(x_valores, banda_inferior, linestyle='--', linewidth=2, color='green')
+        ax.plot(x_valores, banda_superior, linestyle='--', linewidth=2, color='red', label='Canal Dinámico Superior')
+        ax.plot(x_valores, banda_inferior, linestyle='--', linewidth=2, color='green', label='Canal Dinámico Inferior')
+        
+        # Dibujar EMA20
+        if MOSTRAR_EMA20 and 'ema20' in df_plot.columns:
+            ax.plot(x_valores, df_plot['ema20'].values, color='yellow', linewidth=2, label='EMA20')
 
         entrada_x_idx = len(df_plot) - 2
         entrada_precio_final = closes[-2]
@@ -644,8 +680,9 @@ def generar_grafico_entrada(df, decision, soporte, resistencia, slope, intercept
         
         ax.text(0.02, 0.98, texto_panel, transform=ax.transAxes, fontsize=11, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.85))
 
-        ax.set_title(f"BOT V92.4 - BTCUSDT - Entrada {decision} (5 Minutos)")
+        ax.set_title(f"BOT V93.0 - BTCUSDT - Entrada {decision} Multi-Zona (5m)")
         ax.grid(True, alpha=0.2)
+        plt.legend(loc="lower right")
         plt.tight_layout()
         
         return fig
@@ -697,7 +734,7 @@ def generar_grafico_salida(df, trade_data):
         texto_panel_salida = f"CIERRE DE OPERACION {decision_original}\nMotivo de Salida: {motivo_cierre}\nResultado PnL: {pnl_obtenido:.4f} USD\nNuevo Balance: {balance_actual:.2f} USD"
         ax.text(0.02, 0.95, texto_panel_salida, transform=ax.transAxes, fontsize=12, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
 
-        ax.set_title(f"BOT V92.4 - DETALLE DE CIERRE - {texto_resultado}")
+        ax.set_title(f"BOT V93.0 - DETALLE DE CIERRE - {texto_resultado}")
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
         
@@ -716,9 +753,9 @@ def log_colab(df, tendencia, slope, soporte, resistencia, decision, razones, log
     print(f"🕒 {ahora} | 💰 Precio Analizado: {precio:.2f}")
     
     if log_zonas:
-        print(f"🔎 Distancia al Soporte: {log_zonas.get('dist_soporte', 0):.2f} USD | En Zona: {log_zonas.get('en_soporte')}")
-        print(f"🔎 Distancia a Resistencia: {log_zonas.get('dist_resistencia', 0):.2f} USD | En Zona: {log_zonas.get('en_resistencia')}")
-        print(f"🔎 Micro Tendencia: {log_zonas.get('micro_tendencia').upper()} (Informativo) (Tolerancia Zona: {log_zonas.get('tolerancia', 0):.2f} USD)")
+        print(f"🔎 Estado Zona COMPRA: {log_zonas.get('zonas_compra')} | Validada: {log_zonas.get('en_soporte')}")
+        print(f"🔎 Estado Zona VENTA:  {log_zonas.get('zonas_venta')} | Validada: {log_zonas.get('en_resistencia')}")
+        print(f"🔎 Micro Tendencia: {log_zonas.get('micro_tendencia').upper()} (Tolerancia Multi-Zona: {log_zonas.get('tolerancia', 0):.2f} USD)")
 
     if decision:
         print(f"🎯 DECISIÓN TOMADA: {decision.upper()}")
@@ -753,7 +790,6 @@ def paper_abrir_posicion(decision, precio, atr, soporte, resistencia, razones, t
 
     riesgo_usd = PAPER_BALANCE * RISK_PER_TRADE
     
-    # V92.4: Implementamos R/R Equilibrado.
     if decision == "Buy":
         sl = precio - (atr * MULT_SL)
         tp1 = precio + (atr * MULT_TP1)
@@ -846,7 +882,6 @@ def paper_revisar_sl_tp(df):
                 telegram_mensaje(f"🎯 TP1 ALCANZADO (+{PAPER_PNL_PARCIAL:.2f} USD). {PORCENTAJE_CIERRE*100}% cerrado, SL a Break Even. Iniciando Trailing...")
 
         if PAPER_TP1_EJECUTADO == True:
-            # V92.4: Trailing Stop dinámico usando MULT_TRAILING (2.0 ATR)
             nuevo_sl_dinamico = close - (atr_actual * MULT_TRAILING)
             if nuevo_sl_dinamico > PAPER_SL:
                 PAPER_SL = nuevo_sl_dinamico 
@@ -1174,7 +1209,7 @@ class InstitutionalSecondarySystem:
 # ======================================================
 
 def run_bot():
-    mensaje_inicio = "🤖 BOT V92.4 BYBIT REAL INICIADO.\nMejora de Riesgo/Beneficio (TP a 2.5 ATR / SL 1.5 ATR).\nConfiguración 5 MINUTOS EQUILIBRADA."
+    mensaje_inicio = "🤖 BOT V93.0 BYBIT REAL INICIADO.\nMejora MULTI-ZONE (Soporte Horizontal, Canal Dinámico, EMA20).\nConfiguración 5 MINUTOS EQUILIBRADA."
     telegram_mensaje(mensaje_inicio)
 
     sistema_institucional = InstitutionalSecondarySystem(telegram_mensaje)
@@ -1198,6 +1233,7 @@ def run_bot():
             razones_para_entrar =[]
             
             if PAPER_POSICION_ACTIVA is None:
+                # Detector Nison ahora revisa múltiples zonas de impacto
                 patron_detectado, decision_final, nombre_patron, log_zonas = detectar_patron_nison(df, soporte, resistencia, idx=idx_eval)
 
                 if ultima_vela_operada == tiempo_vela_cerrada:
@@ -1209,13 +1245,19 @@ def run_bot():
                     if patron_detectado == True:
                         lista_log =[nombre_patron]
                     else:
-                        lista_log = ["Buscando patrón Nison CERRADO válido..."]
+                        lista_log =["Buscando patrón Nison CERRADO válido..."]
                     
                 log_colab(df, tendencia_macro, slope, soporte, resistencia, decision_final, lista_log, log_zonas, idx=idx_eval)
 
                 if decision_final is not None:
-                    razones_para_entrar.append(f"Arquitectura Confirmada: {nombre_patron}")
-                    razones_para_entrar.append(f"Geometria de S/R Respetada y Validada")
+                    # Capturamos en qué zonas exactas rebotó el precio para el Log
+                    if decision_final == "Buy":
+                        zonas_activadas = log_zonas.get('zonas_compra')
+                    else:
+                        zonas_activadas = log_zonas.get('zonas_venta')
+                        
+                    razones_para_entrar.append(f"Arquitectura: {nombre_patron}")
+                    razones_para_entrar.append(f"Rebote Confirmado en: {zonas_activadas}")
                     
                     riesgo_valido = risk_management_check()
                     
@@ -1231,10 +1273,10 @@ def run_bot():
                             texto_entrada += f"📍 SL Inicial: {PAPER_SL:.2f} | TP1 Objetivo: {PAPER_TP1:.2f}\n"
                             
                             margen_inversion = PAPER_SIZE_USD / LEVERAGE
-                            texto_entrada += f"💼 Margen Usado: {margen_inversion:.2f} USD ({LEVERAGE}x)\n"
+                            texto_entrada += f"💼 Margen Usado: {margen_inversion:.2f} USD ({LEVERAGE}x)\n\n"
                             
-                            razones_unidas = ', '.join(razones_para_entrar)
-                            texto_entrada += f"🧠 Justificación Analítica: {razones_unidas}"
+                            razones_unidas = '\n'.join(razones_para_entrar)
+                            texto_entrada += f"🧠 Justificación Analítica:\n{razones_unidas}"
                             
                             telegram_mensaje(texto_entrada)
                             

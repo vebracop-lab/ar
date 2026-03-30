@@ -1,12 +1,13 @@
-# BOT TRADING V92.3 BYBIT REAL – PRODUCCIÓN (SIN PROXY) 
+# BOT TRADING V92.4 BYBIT REAL – PRODUCCIÓN (SIN PROXY) 
 # ======================================================
 # ⚠️ KEYS INCLUIDAS TAL CUAL (SEGÚN PEDIDO)
 # Diseñado para FUTUROS PERPETUOS BTCUSDT en Bybit
 # ======================================================
-# NOVEDADES V92.3 (FINANCIAL ENGINE FIX):
-# - Solucionado el R/R negativo (Arriesgar 2 para ganar 1).
-# - Nuevos Multiplicadores: SL=1.2 ATR | TP1=2.0 ATR | Trailing=1.5 ATR.
-# - El bot ahora exige que la ganancia supere la pérdida matemáticamente.
+# NOVEDADES V92.4 (BALANCED SCALPER 5m):
+# - Configuración Equilibrada de Riesgo/Beneficio para absorber mechas:
+#   * SL = 1.5 ATR (Más espacio para respirar contra la volatilidad).
+#   * TP1 = 2.5 ATR (Mayor recorrido exigido para asegurar 50%).
+#   * Trailing = 2.0 ATR (Evita cierres prematuros por pullbacks normales).
 # - Temporalidad de 5 MINUTOS y Anti-Spam de vela activos.
 # - CÓDIGO 100% EXPANDIDO SIN RECORTES.
 # ======================================================
@@ -49,10 +50,10 @@ RISK_PER_TRADE = 0.02  # 2% de riesgo por trade ($2.00 USD)
 LEVERAGE = 10          # 10x de apalancamiento (Poder de compra de $1000)
 SLEEP_SECONDS = 60     
 
-# MULTIPLICADORES DE RIESGO/BENEFICIO (NUEVO MOTOR V92.3)
-MULT_SL = 1.2          # Distancia del Stop Loss inicial
-MULT_TP1 = 2.0         # Distancia del Take Profit 1
-MULT_TRAILING = 1.5    # Distancia del Trailing Stop para dejar correr la tendencia
+# MULTIPLICADORES DE RIESGO/BENEFICIO (NUEVO MOTOR V92.4 - EQUILIBRADO)
+MULT_SL = 1.5          # Le da a la vela más espacio para "respirar"
+MULT_TP1 = 2.5         # Exigimos un poco más de recorrido para pagar el riesgo
+MULT_TRAILING = 2.0    # Evita que un pullback normal de 5m te cierre el trade prematuramente
 PORCENTAJE_CIERRE = 0.5 # Cerramos el 50% en TP1
 
 # ======================================================
@@ -643,7 +644,7 @@ def generar_grafico_entrada(df, decision, soporte, resistencia, slope, intercept
         
         ax.text(0.02, 0.98, texto_panel, transform=ax.transAxes, fontsize=11, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.85))
 
-        ax.set_title(f"BOT V92.3 - BTCUSDT - Entrada {decision} (5 Minutos)")
+        ax.set_title(f"BOT V92.4 - BTCUSDT - Entrada {decision} (5 Minutos)")
         ax.grid(True, alpha=0.2)
         plt.tight_layout()
         
@@ -696,7 +697,7 @@ def generar_grafico_salida(df, trade_data):
         texto_panel_salida = f"CIERRE DE OPERACION {decision_original}\nMotivo de Salida: {motivo_cierre}\nResultado PnL: {pnl_obtenido:.4f} USD\nNuevo Balance: {balance_actual:.2f} USD"
         ax.text(0.02, 0.95, texto_panel_salida, transform=ax.transAxes, fontsize=12, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
 
-        ax.set_title(f"BOT V92.3 - DETALLE DE CIERRE - {texto_resultado}")
+        ax.set_title(f"BOT V92.4 - DETALLE DE CIERRE - {texto_resultado}")
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
         
@@ -730,7 +731,7 @@ def log_colab(df, tendencia, slope, soporte, resistencia, decision, razones, log
     print("="*100)
 
 # ======================================================
-# MOTOR FINANCIERO Y GESTIÓN (V92.3 R/R CORREGIDO)
+# MOTOR FINANCIERO Y GESTIÓN (V92.4 R/R EQUILIBRADO)
 # ======================================================
 
 def paper_abrir_posicion(decision, precio, atr, soporte, resistencia, razones, tiempo):
@@ -752,8 +753,7 @@ def paper_abrir_posicion(decision, precio, atr, soporte, resistencia, razones, t
 
     riesgo_usd = PAPER_BALANCE * RISK_PER_TRADE
     
-    # V92.3: Implementamos R/R positivo.
-    # El SL está a 1.2 ATR de distancia. El TP1 está a 2.0 ATR de distancia.
+    # V92.4: Implementamos R/R Equilibrado.
     if decision == "Buy":
         sl = precio - (atr * MULT_SL)
         tp1 = precio + (atr * MULT_TP1)
@@ -834,7 +834,6 @@ def paper_revisar_sl_tp(df):
     if PAPER_POSICION_ACTIVA == "Buy":
         if PAPER_TP1_EJECUTADO == False:
             if high >= PAPER_TP1:
-                # V92.3: Usar la variable de porcentaje de cierre
                 cantidad_a_cerrar = PAPER_SIZE_BTC * PORCENTAJE_CIERRE
                 PAPER_PNL_PARCIAL = (PAPER_TP1 - PAPER_PRECIO_ENTRADA) * cantidad_a_cerrar
                 
@@ -847,7 +846,7 @@ def paper_revisar_sl_tp(df):
                 telegram_mensaje(f"🎯 TP1 ALCANZADO (+{PAPER_PNL_PARCIAL:.2f} USD). {PORCENTAJE_CIERRE*100}% cerrado, SL a Break Even. Iniciando Trailing...")
 
         if PAPER_TP1_EJECUTADO == True:
-            # V92.3: Trailing Mult ahora es 1.5 ATR
+            # V92.4: Trailing Stop dinámico usando MULT_TRAILING (2.0 ATR)
             nuevo_sl_dinamico = close - (atr_actual * MULT_TRAILING)
             if nuevo_sl_dinamico > PAPER_SL:
                 PAPER_SL = nuevo_sl_dinamico 
@@ -1175,7 +1174,7 @@ class InstitutionalSecondarySystem:
 # ======================================================
 
 def run_bot():
-    mensaje_inicio = "🤖 BOT V92.3 BYBIT REAL INICIADO.\nMejora de Riesgo/Beneficio (TP a 2 ATR) implementada.\nConfiguración 5 MINUTOS habilitada."
+    mensaje_inicio = "🤖 BOT V92.4 BYBIT REAL INICIADO.\nMejora de Riesgo/Beneficio (TP a 2.5 ATR / SL 1.5 ATR).\nConfiguración 5 MINUTOS EQUILIBRADA."
     telegram_mensaje(mensaje_inicio)
 
     sistema_institucional = InstitutionalSecondarySystem(telegram_mensaje)
@@ -1208,7 +1207,7 @@ def run_bot():
                         patron_detectado = False
                 else:
                     if patron_detectado == True:
-                        lista_log = [nombre_patron]
+                        lista_log =[nombre_patron]
                     else:
                         lista_log = ["Buscando patrón Nison CERRADO válido..."]
                     

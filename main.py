@@ -1,13 +1,13 @@
-# BOT TRADING V96.0 BYBIT REAL – PRODUCCIÓN (SIN PROXY) 
+# BOT TRADING V99.0 BYBIT REAL – PRODUCCIÓN (SIN PROXY) 
 # ======================================================
 # ⚠️ KEYS INCLUIDAS TAL CUAL (SEGÚN PEDIDO)
 # Diseñado para FUTUROS PERPETUOS BTCUSDT en Bybit
 # ======================================================
-# NOVEDADES V96.0 (TOTAL UNBLOCKED SCALPER):
-# - FIX DEFINITIVO: Eliminada por completo la restricción de "Micro-Tendencia" 
-#   (Pullback) de las funciones de Nison. Ahora el bot dispara inmediatamente
-#   al detectar la forma de la vela en la zona de Soporte/Resistencia.
-# - Patrones relajados al extremo para imitar el "ojo humano" en Crypto.
+# NOVEDADES V99.0 (POLARITY & ACCELERATED TRAILING):
+# - PRINCIPIO DE POLARIDAD: Detecta Soportes convertidos en Resistencias y viceversa.
+# - TRAILING ACELERADO: El Stop Loss Dinámico se "aprieta" conforme las ganancias 
+#   aumentan (+3 ATR, +5 ATR) para asfixiar al precio y maximizar el TP2 infinito.
+# - Inteligencia espacial, EMA Rejection y Canales Dinámicos activos.
 # - CÓDIGO 100% EXPANDIDO. CERO COMPRESIÓN.
 # ======================================================
 
@@ -42,14 +42,14 @@ def cerca_de_nivel(precio, nivel, margen):
 
 SYMBOL = "BTCUSDT"
 INTERVAL = "5"  
-RISK_PER_TRADE = 0.02  # 2% de riesgo ($2.00 USD por trade en cuenta de $100)
-LEVERAGE = 10          # 10x de apalancamiento
+RISK_PER_TRADE = 0.02  
+LEVERAGE = 10          
 SLEEP_SECONDS = 60     
 
-# MULTIPLICADORES DE RIESGO/BENEFICIO (EQUILIBRADO 5m)
+# MULTIPLICADORES DE RIESGO/BENEFICIO 
 MULT_SL = 1.5          
 MULT_TP1 = 2.5         
-MULT_TRAILING = 2.0    
+MULT_TRAILING_BASE = 2.0    
 PORCENTAJE_CIERRE = 0.5 
 
 # ======================================================
@@ -109,10 +109,7 @@ def telegram_mensaje(texto):
         return
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {
-            "chat_id": TELEGRAM_CHAT_ID, 
-            "text": texto
-        }
+        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": texto}
         requests.post(url, data=payload, timeout=10)
     except Exception:
         pass
@@ -182,7 +179,7 @@ def obtener_velas(limit=300):
     return df
 
 # ======================================================
-# INDICADORES Y ZONAS MULTIPLES
+# INDICADORES Y ZONAS MULTIPLES (CON POLARIDAD)
 # ======================================================
 def calcular_indicadores(df):
     df['ema20'] = df['close'].ewm(span=20).mean()
@@ -195,24 +192,37 @@ def calcular_indicadores(df):
     df['atr'] = tr.rolling(14).mean()
 
     delta = df['close'].diff()
-    
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
     
-    avg_gain = gain.rolling(window=14).mean()
-    avg_loss = loss.rolling(window=14).mean()
+    avg_gain = gain.rolling(window=14, min_periods=1).mean()
+    avg_loss = loss.rolling(window=14, min_periods=1).mean()
     
-    rs = avg_gain / avg_loss
+    rs = avg_gain / avg_loss.replace(0, 1e-9)
     df['rsi'] = 100 - (100 / (1 + rs))
+    df['rsi'] = df['rsi'].fillna(50)
 
     return df.dropna()
 
 def detectar_zonas_mercado(df, idx=-2, ventana_macro=120):
     df_eval = df.iloc[:idx+1]
     
-    # Soportes Horizontales (40 velas = 3.3 horas en 5m)
+    # Soportes y Resistencias Inmediatos (40 velas = 3.3 horas en 5m)
     soporte_horiz = df_eval['low'].rolling(40).min().iloc[-1]
     resistencia_horiz = df_eval['high'].rolling(40).max().iloc[-1]
+    
+    if pd.isna(soporte_horiz): 
+        soporte_horiz = df_eval['low'].min()
+    if pd.isna(resistencia_horiz): 
+        resistencia_horiz = df_eval['high'].max()
+        
+    # PRINCIPIO DE POLARIDAD (Histórico de 40 a 80 velas atrás)
+    if len(df_eval) >= 80:
+        max_previo = df_eval['high'].iloc[-80:-40].max()
+        min_previo = df_eval['low'].iloc[-80:-40].min()
+    else:
+        max_previo = resistencia_horiz
+        min_previo = soporte_horiz
     
     # Tendencia Macro y Canal Dinámico
     if len(df_eval) < ventana_macro:
@@ -221,7 +231,12 @@ def detectar_zonas_mercado(df, idx=-2, ventana_macro=120):
         y_macro = df_eval['close'].values[-ventana_macro:]
         
     x_macro = np.arange(len(y_macro))
-    slope, intercept, r_value, p_value, std_err = linregress(x_macro, y_macro)
+    
+    if len(y_macro) > 1 and not np.isnan(y_macro).any():
+        slope, intercept, r_value, p_value, std_err = linregress(x_macro, y_macro)
+    else:
+        slope = 0.0
+        intercept = y_macro[-1]
     
     if slope > 0.01: 
         tendencia_macro = '📈 ALCISTA'
@@ -231,40 +246,13 @@ def detectar_zonas_mercado(df, idx=-2, ventana_macro=120):
         tendencia_macro = '➡️ LATERAL'
         
     linea_central = intercept + slope * x_macro
-    residuos = y_macro - linea_central
-    desviacion = np.std(residuos)
+    desviacion = np.std(y_macro - linea_central) if not np.isnan(np.std(y_macro - linea_central)) else 0
     
     canal_sup = linea_central[-1] + (desviacion * 1.5)
     canal_inf = linea_central[-1] - (desviacion * 1.5)
     
-    return soporte_horiz, resistencia_horiz, canal_sup, canal_inf, slope, intercept, tendencia_macro
+    return soporte_horiz, resistencia_horiz, canal_sup, canal_inf, slope, intercept, tendencia_macro, max_previo, min_previo
 
-def tendencia_previa_micro(df, idx, velas=6):
-    """ Función puramente informativa para los logs. Ya no bloquea trades. """
-    if idx - velas < 0: 
-        return "neutral"
-    
-    rango_eval = df.iloc[idx-velas : idx+1]
-    max_rango = rango_eval['high'].max()
-    min_rango = rango_eval['low'].min()
-    rango_total = max_rango - min_rango
-    
-    if rango_total == 0: 
-        return "neutral"
-        
-    precio_patron = df['close'].iloc[idx]
-    posicion_pct = (precio_patron - min_rango) / rango_total
-    
-    if posicion_pct <= 0.35: 
-        return "bajista" 
-    elif posicion_pct >= 0.65: 
-        return "alcista" 
-    else:
-        return "lateral"
-
-# ======================================================
-# 🕯️ ARSENAL NISON (TOTALMENTE DESBLOQUEADO Y RELAJADO)
-# ======================================================
 def calcular_cuerpo_mechas(row):
     cuerpo = abs(row['close'] - row['open'])
     if cuerpo == 0:
@@ -273,6 +261,7 @@ def calcular_cuerpo_mechas(row):
     alto = row['high']
     bajo = row['low']
     rango = alto - bajo
+    
     if rango == 0:
         rango = 0.0001
         
@@ -284,69 +273,177 @@ def calcular_cuerpo_mechas(row):
     
     return cuerpo, mecha_sup, mecha_inf, rango, top, bottom
 
-# --- 1. HAMMER (MARTILLO) ---
+def cierre_fuerte(row, direccion):
+    cuerpo, mecha_sup, mecha_inf, rango, top, bottom = calcular_cuerpo_mechas(row)
+    if direccion == "alcista":
+        if row['close'] >= (row['low'] + (rango * 0.45)):
+            return True
+        else:
+            return False
+    else:
+        if row['close'] <= (row['high'] - (rango * 0.45)):
+            return True
+        else:
+# ======================================================
+# 🕯️ ARSENAL NISON (SIN BLOQUEOS / 100% EXPANDIDO)
+# ======================================================
+
 def es_hammer_nison(df, idx):
-    vela = df.iloc[idx]
+    vela = df.iloc[idx] 
     cuerpo, m_sup, m_inf, rango, top, bottom = calcular_cuerpo_mechas(vela)
     
-    # 1.2x el cuerpo es un martillo visualmente válido. Mecha superior no estorba.
-    if m_inf >= (1.2 * cuerpo) and m_sup <= (m_inf * 0.8):
+    if m_inf >= (1.5 * cuerpo):
+        condicion_mecha_larga = True
+    else:
+        condicion_mecha_larga = False
+        
+    if m_sup <= (m_inf * 0.5):
+        condicion_sin_mecha_arriba = True
+    else:
+        condicion_sin_mecha_arriba = False
+        
+    if condicion_mecha_larga and condicion_sin_mecha_arriba:
         return True
     return False
 
-# --- 2. SHOOTING STAR (ESTRELLA FUGAZ) ---
 def es_shooting_star_nison(df, idx):
     vela = df.iloc[idx]
     cuerpo, m_sup, m_inf, rango, top, bottom = calcular_cuerpo_mechas(vela)
     
-    if m_sup >= (1.2 * cuerpo) and m_inf <= (m_sup * 0.8):
+    if m_sup >= (1.5 * cuerpo):
+        condicion_mecha_larga = True
+    else:
+        condicion_mecha_larga = False
+        
+    if m_inf <= (m_sup * 0.5):
+        condicion_sin_mecha_abajo = True
+    else:
+        condicion_sin_mecha_abajo = False
+        
+    if condicion_mecha_larga and condicion_sin_mecha_abajo:
         return True
     return False
 
-# --- 3. BULLISH ENGULFING (ENVOLVENTE ALCISTA) ---
 def es_bullish_engulfing_nison(df, idx):
     prev = df.iloc[idx-1]
     curr = df.iloc[idx]
     
-    # La vela anterior debe ser roja (o doji) y la actual verde
-    if prev['close'] <= prev['open'] and curr['close'] > curr['open']:
-        # Solo exige que el cuerpo verde supere la apertura de la roja
-        if curr['close'] >= prev['open'] and curr['open'] <= prev['close']:
-            return True
+    if prev['close'] <= prev['open']:
+        es_prev_roja = True
+    else:
+        es_prev_roja = False
+        
+    if curr['close'] > curr['open']:
+        es_curr_verde = True
+    else:
+        es_curr_verde = False
+    
+    if not (es_prev_roja and es_curr_verde): 
+        return False
+        
+    if curr['close'] >= prev['open']:
+        condicion_envuelve = True
+    else:
+        condicion_envuelve = False
+        
+    if condicion_envuelve and cierre_fuerte(curr, "alcista"):
+        return True
     return False
 
-# --- 4. BEARISH ENGULFING (ENVOLVENTE BAJISTA) ---
 def es_bearish_engulfing_nison(df, idx):
     prev = df.iloc[idx-1]
     curr = df.iloc[idx]
     
-    if prev['close'] >= prev['open'] and curr['close'] < curr['open']:
-        if curr['close'] <= prev['open'] and curr['open'] >= prev['close']:
-            return True
+    if prev['close'] >= prev['open']:
+        es_prev_verde = True
+    else:
+        es_prev_verde = False
+        
+    if curr['close'] < curr['open']:
+        es_curr_roja = True
+    else:
+        es_curr_roja = False
+    
+    if not (es_prev_verde and es_curr_roja): 
+        return False
+        
+    if curr['close'] <= prev['open']:
+        condicion_envuelve = True
+    else:
+        condicion_envuelve = False
+        
+    if condicion_envuelve and cierre_fuerte(curr, "bajista"):
+        return True
     return False
 
-# --- 5. PIERCING PATTERN (PAUTA PENETRANTE) ---
 def es_piercing_nison(df, idx):
     prev = df.iloc[idx-1]
     curr = df.iloc[idx]
     
-    if prev['close'] < prev['open'] and curr['close'] > curr['open']:
-        # Recuperar aunque sea un poco del cuerpo rojo es válido en Crypto (No pide Gaps)
-        if curr['close'] > prev['close']:
-            return True
+    if prev['close'] < prev['open']:
+        es_prev_roja = True
+    else:
+        es_prev_roja = False
+        
+    if curr['close'] > curr['open']:
+        es_curr_verde = True
+    else:
+        es_curr_verde = False
+        
+    if not (es_prev_roja and es_curr_verde): 
+        return False
+        
+    rango_rojo = prev['open'] - prev['close']
+    umbral_penetracion = prev['close'] + (rango_rojo * 0.20)
+    
+    if curr['close'] >= umbral_penetracion:
+        condicion_penetra = True
+    else:
+        condicion_penetra = False
+        
+    if curr['close'] <= prev['open']:
+        condicion_no_envuelve = True
+    else:
+        condicion_no_envuelve = False
+    
+    if condicion_penetra and condicion_no_envuelve and cierre_fuerte(curr, "alcista"):
+        return True
     return False
 
-# --- 6. DARK CLOUD COVER (NUBE OSCURA) ---
 def es_dark_cloud_nison(df, idx):
     prev = df.iloc[idx-1]
     curr = df.iloc[idx]
     
-    if prev['close'] > prev['open'] and curr['close'] < curr['open']:
-        if curr['close'] < prev['close']:
-            return True
+    if prev['close'] > prev['open']:
+        es_prev_verde = True
+    else:
+        es_prev_verde = False
+        
+    if curr['close'] < curr['open']:
+        es_curr_roja = True
+    else:
+        es_curr_roja = False
+        
+    if not (es_prev_verde and es_curr_roja): 
+        return False
+        
+    rango_verde = prev['close'] - prev['open']
+    umbral_penetracion = prev['close'] - (rango_verde * 0.20)
+    
+    if curr['close'] <= umbral_penetracion:
+        condicion_penetra = True
+    else:
+        condicion_penetra = False
+        
+    if curr['close'] >= prev['open']:
+        condicion_no_envuelve = True
+    else:
+        condicion_no_envuelve = False
+    
+    if condicion_penetra and condicion_no_envuelve and cierre_fuerte(curr, "bajista"):
+        return True
     return False
 
-# --- 7. MORNING STAR (ESTRELLA DE LA MAÑANA) ---
 def es_morning_star_nison(df, idx):
     if idx < 2: 
         return False
@@ -355,13 +452,37 @@ def es_morning_star_nison(df, idx):
     c2 = df.iloc[idx-1]
     c3 = df.iloc[idx]
     
-    if c1['close'] < c1['open'] and c3['close'] > c3['open']:
-        # La vela 3 debe recuperar por encima de la estrella
-        if c3['close'] > c2['high']:
-            return True
+    if c1['close'] < c1['open']:
+        es_c1_roja = True
+    else:
+        es_c1_roja = False
+        
+    if c3['close'] > c3['open']:
+        es_c3_verde = True
+    else:
+        es_c3_verde = False
+        
+    if not (es_c1_roja and es_c3_verde): 
+        return False
+        
+    c1_body, _, _, _, _, _ = calcular_cuerpo_mechas(c1)
+    c2_body, _, _, _, _, _ = calcular_cuerpo_mechas(c2)
+    
+    if c2_body <= (c1_body * 0.70):
+        condicion_cuerpo = True
+    else:
+        condicion_cuerpo = False
+        
+    umbral_penetracion = c1['close'] + (c1_body * 0.20)
+    if c3['close'] >= umbral_penetracion:
+        condicion_penetra = True
+    else:
+        condicion_penetra = False
+        
+    if condicion_cuerpo and condicion_penetra and cierre_fuerte(c3, "alcista"):
+        return True
     return False
 
-# --- 8. EVENING STAR (ESTRELLA DEL ATARDECER) ---
 def es_evening_star_nison(df, idx):
     if idx < 2: 
         return False
@@ -370,37 +491,80 @@ def es_evening_star_nison(df, idx):
     c2 = df.iloc[idx-1]
     c3 = df.iloc[idx]
     
-    if c1['close'] > c1['open'] and c3['close'] < c3['open']:
-        if c3['close'] < c2['low']:
-            return True
+    if c1['close'] > c1['open']:
+        es_c1_verde = True
+    else:
+        es_c1_verde = False
+        
+    if c3['close'] < c3['open']:
+        es_c3_roja = True
+    else:
+        es_c3_roja = False
+        
+    if not (es_c1_verde and es_c3_roja): 
+        return False
+        
+    c1_body, _, _, _, _, _ = calcular_cuerpo_mechas(c1)
+    c2_body, _, _, _, _, _ = calcular_cuerpo_mechas(c2)
+    
+    if c2_body <= (c1_body * 0.70):
+        condicion_cuerpo = True
+    else:
+        condicion_cuerpo = False
+        
+    umbral_penetracion = c1['close'] - (c1_body * 0.20)
+    if c3['close'] <= umbral_penetracion:
+        condicion_penetra = True
+    else:
+        condicion_penetra = False
+        
+    if condicion_cuerpo and condicion_penetra and cierre_fuerte(c3, "bajista"):
+        return True
     return False
 
-# --- 9. TWEEZER BOTTOMS ---
 def es_tweezer_bottom_nison(df, idx):
     c1 = df.iloc[idx-1]
     c2 = df.iloc[idx]
     
-    tolerancia = df['atr'].iloc[idx] * 0.50 
+    tolerancia = df['atr'].iloc[idx] * 0.60 
     
     if abs(c2['low'] - c1['low']) <= tolerancia:
-        if c2['close'] > c2['open']:  # La segunda rechaza al alza
-            return True
+        mismos_minimos = True
+    else:
+        mismos_minimos = False
+        
+    if c2['close'] > c2['open']:
+        es_c2_verde = True
+    else:
+        es_c2_verde = False
+    
+    if mismos_minimos and es_c2_verde and cierre_fuerte(c2, "alcista"):
+        return True
     return False
 
-# --- 10. TWEEZER TOPS ---
 def es_tweezer_top_nison(df, idx):
     c1 = df.iloc[idx-1]
     c2 = df.iloc[idx]
     
-    tolerancia = df['atr'].iloc[idx] * 0.50
+    tolerancia = df['atr'].iloc[idx] * 0.60
     
     if abs(c2['high'] - c1['high']) <= tolerancia:
-        if c2['close'] < c2['open']:
-            return True
+        mismos_maximos = True
+    else:
+        mismos_maximos = False
+        
+    if c2['close'] < c2['open']:
+        es_c2_roja = True
+    else:
+        es_c2_roja = False
+    
+    if mismos_maximos and es_c2_roja and cierre_fuerte(c2, "bajista"):
+        return True
     return False
 
-# --- 11. THREE WHITE SOLDIERS ---
-def es_three_white_soldiers(df, idx):
+def es_three_white_soldiers(df, idx, rsi_actual):
+    if rsi_actual > 75: 
+        return False 
     if idx < 2: 
         return False
         
@@ -408,13 +572,34 @@ def es_three_white_soldiers(df, idx):
     c2 = df.iloc[idx-1]
     c3 = df.iloc[idx]
     
-    if c1['close'] > c1['open'] and c2['close'] > c2['open'] and c3['close'] > c3['open']:
-        if c2['close'] > c1['close'] and c3['close'] > c2['close']:
+    if c1['close'] > c1['open']:
+        es_c1_verde = True
+    else:
+        es_c1_verde = False
+        
+    if c2['close'] > c2['open']:
+        es_c2_verde = True
+    else:
+        es_c2_verde = False
+        
+    if c3['close'] > c3['open']:
+        es_c3_verde = True
+    else:
+        es_c3_verde = False
+    
+    if es_c1_verde and es_c2_verde and es_c3_verde:
+        if (c2['close'] > c1['close']) and (c3['close'] > c2['close']):
+            subida_escalonada = True
+        else:
+            subida_escalonada = False
+            
+        if subida_escalonada and cierre_fuerte(c2, "alcista") and cierre_fuerte(c3, "alcista"):
             return True
     return False
 
-# --- 12. THREE BLACK CROWS ---
-def es_three_black_crows(df, idx):
+def es_three_black_crows(df, idx, rsi_actual):
+    if rsi_actual < 25: 
+        return False 
     if idx < 2: 
         return False
         
@@ -422,57 +607,153 @@ def es_three_black_crows(df, idx):
     c2 = df.iloc[idx-1]
     c3 = df.iloc[idx]
     
-    if c1['close'] < c1['open'] and c2['close'] < c2['open'] and c3['close'] < c3['open']:
-        if c2['close'] < c1['close'] and c3['close'] < c2['close']:
+    if c1['close'] < c1['open']:
+        es_c1_roja = True
+    else:
+        es_c1_roja = False
+        
+    if c2['close'] < c2['open']:
+        es_c2_roja = True
+    else:
+        es_c2_roja = False
+        
+    if c3['close'] < c3['open']:
+        es_c3_roja = True
+    else:
+        es_c3_roja = False
+    
+    if es_c1_roja and es_c2_roja and es_c3_roja:
+        if (c2['close'] < c1['close']) and (c3['close'] < c2['close']):
+            bajada_escalonada = True
+        else:
+            bajada_escalonada = False
+            
+        if bajada_escalonada and cierre_fuerte(c2, "bajista") and cierre_fuerte(c3, "bajista"):
             return True
     return False
 
-# === DETECTOR MAESTRO NISON MULTI-ZONA ===
-def detectar_patron_nison(df, sop_horiz, res_horiz, canal_sup, canal_inf, idx=-2):
+    # === DETECTOR MAESTRO NISON MULTI-ZONA (CON POLARIDAD) ===
+def detectar_patron_nison(df, sop_horiz, res_horiz, canal_sup, canal_inf, tendencia_macro, max_previo, min_previo, idx=-2):
     if len(df) < 15: 
         return False, None, None, {}
         
     atr_actual = df['atr'].iloc[idx]
+    rsi_actual = df['rsi'].iloc[idx]
     ema20_actual = df['ema20'].iloc[idx]
     precio_cierre = df['close'].iloc[idx]
     
-    # Evalúa el mínimo de todo el patrón posible (últimas 3 velas)
-    min_patron = df['low'].iloc[idx-2 : idx+1].min()
-    max_patron = df['high'].iloc[idx-2 : idx+1].max()
+    min_patron = df['low'].iloc[idx]
+    max_patron = df['high'].iloc[idx]
     
-    micro_tendencia = tendencia_previa_micro(df, idx)
+    # ----------------------------------------------------
+    # 🧠 1. INTELIGENCIA ESPACIAL: Rango Local y Posición
+    # ----------------------------------------------------
+    rango_local = res_horiz - sop_horiz
+    if rango_local <= 0: 
+        rango_local = 0.0001
     
-    # Tolerancia balanceada (2.0x ATR o mínimo 150 USD) -> ¡Abre el embudo!
-    tolerancia_zona = max(atr_actual * 2.0, 150)
+    posicion_en_rango = (precio_cierre - sop_horiz) / rango_local
     
-    toca_sop_horiz = cerca_de_nivel(min_patron, sop_horiz, tolerancia_zona) 
-    toca_res_horiz = cerca_de_nivel(max_patron, res_horiz, tolerancia_zona)
+    tolerancia_zona = atr_actual * 1.5
+    
+    # ----------------------------------------------------
+    # 🧠 2. ANÁLISIS DE RECHAZO DE MEDIA MÓVIL (EMA 20)
+    # ----------------------------------------------------
+    toques_techo_ema = 0
+    toques_suelo_ema = 0
+    
+    for i in range(idx-3, idx+1):
+        h = df['high'].iloc[i]
+        l = df['low'].iloc[i]
+        c = df['close'].iloc[i]
+        ema = df['ema20'].iloc[i]
+        
+        if h >= (ema - atr_actual*0.1) and c <= ema:
+            toques_techo_ema += 1
+            
+        if l <= (ema + atr_actual*0.1) and c >= ema:
+            toques_suelo_ema += 1
+
+    if toques_techo_ema >= 1 and precio_cierre < ema20_actual:
+        rechazo_bajista_ema = True
+    else:
+        rechazo_bajista_ema = False
+        
+    if toques_suelo_ema >= 1 and precio_cierre > ema20_actual:
+        rechazo_alcista_ema = True
+    else:
+        rechazo_alcista_ema = False
+    
+    # ----------------------------------------------------
+    # 🧠 3. EVALUACIÓN DE ZONAS ESTÁTICAS, DINÁMICAS Y POLARIDAD
+    # ----------------------------------------------------
+    if cerca_de_nivel(min_patron, sop_horiz, tolerancia_zona) and posicion_en_rango < 0.5:
+        toca_sop_horiz = True
+    else:
+        toca_sop_horiz = False
+        
+    if cerca_de_nivel(max_patron, res_horiz, tolerancia_zona) and posicion_en_rango > 0.5:
+        toca_res_horiz = True
+    else:
+        toca_res_horiz = False
+        
+    if cerca_de_nivel(min_patron, max_previo, tolerancia_zona) and precio_cierre >= max_previo:
+        toca_polaridad_sop = True
+    else:
+        toca_polaridad_sop = False
+        
+    if cerca_de_nivel(max_patron, min_previo, tolerancia_zona) and precio_cierre <= min_previo:
+        toca_polaridad_res = True
+    else:
+        toca_polaridad_res = False
     
     toca_sop_dinamico = cerca_de_nivel(min_patron, canal_inf, tolerancia_zona)
     toca_res_dinamica = cerca_de_nivel(max_patron, canal_sup, tolerancia_zona)
     
-    toca_ema20_sop = cerca_de_nivel(min_patron, ema20_actual, tolerancia_zona) and (precio_cierre >= ema20_actual)
-    toca_ema20_res = cerca_de_nivel(max_patron, ema20_actual, tolerancia_zona) and (precio_cierre <= ema20_actual)
-    
-    en_zona_compra = toca_sop_horiz or toca_sop_dinamico or toca_ema20_sop
-    en_zona_venta = toca_res_horiz or toca_res_dinamica or toca_ema20_res
-    
+    en_zona_compra = toca_sop_horiz or toca_sop_dinamico or rechazo_alcista_ema or toca_polaridad_sop
+    en_zona_venta = toca_res_horiz or toca_res_dinamica or rechazo_bajista_ema or toca_polaridad_res
+
+    # ----------------------------------------------------
+    # 🚫 CANDADOS DE CONTEXTO SUPREMO 🚫
+    # ----------------------------------------------------
+    if rechazo_bajista_ema:
+        en_zona_compra = False
+        
+    if rechazo_alcista_ema:
+        en_zona_venta = False
+
+    if tendencia_macro == '📉 BAJISTA':
+        en_zona_compra = False
+    elif tendencia_macro == '📈 ALCISTA':
+        en_zona_venta = False
+
+    if posicion_en_rango >= 0.50 and rechazo_bajista_ema:
+        en_zona_venta = True
+        
+    if posicion_en_rango <= 0.50 and rechazo_alcista_ema:
+        en_zona_compra = True
+
+    # REGISTRO PARA LOGS
     zonas_compra =[]
     if toca_sop_horiz: 
-        zonas_compra.append("Soporte Horizontal")
+        zonas_compra.append("Soporte Horiz")
     if toca_sop_dinamico: 
-        zonas_compra.append("Canal Inferior")
-    if toca_ema20_sop: 
-        zonas_compra.append("EMA 20")
+        zonas_compra.append("Canal Inf")
+    if rechazo_alcista_ema: 
+        zonas_compra.append("EMA 20 (Soporte)")
+    if toca_polaridad_sop:
+        zonas_compra.append("Polaridad (Techo roto)")
         
     zonas_venta =[]
     if toca_res_horiz: 
-        zonas_venta.append("Resistencia Horizontal")
+        zonas_venta.append("Resistencia Horiz")
     if toca_res_dinamica: 
-        zonas_venta.append("Canal Superior")
-    if toca_ema20_res: 
-        zonas_venta.append("EMA 20")
-    
+        zonas_venta.append("Canal Sup")
+    if rechazo_bajista_ema: 
+        zonas_venta.append("EMA 20 (Resistencia)")
+    if toca_polaridad_res:
+        zonas_venta.append("Polaridad (Suelo roto)")
+        
     if len(zonas_compra) > 0:
         texto_zonas_compra = ", ".join(zonas_compra)
     else:
@@ -489,26 +770,24 @@ def detectar_patron_nison(df, sop_horiz, res_horiz, canal_sup, canal_inf, idx=-2
         "en_resistencia": en_zona_venta,
         "zonas_compra": texto_zonas_compra,
         "zonas_venta": texto_zonas_venta,
-        "micro_tendencia": micro_tendencia
+        "posicion_rango": posicion_en_rango
     }
     
-    # --- PATRONES DE COMPRA (SIN RESTRICCIÓN DE MICRO-TENDENCIA) ---
     if en_zona_compra:
         if es_hammer_nison(df, idx): return True, "Buy", "Nison Hammer", log_zonas
         if es_bullish_engulfing_nison(df, idx): return True, "Buy", "Nison Bullish Engulfing", log_zonas
         if es_piercing_nison(df, idx): return True, "Buy", "Nison Piercing Pattern", log_zonas
         if es_morning_star_nison(df, idx): return True, "Buy", "Nison Morning Star", log_zonas
         if es_tweezer_bottom_nison(df, idx): return True, "Buy", "Nison Tweezer Bottoms", log_zonas
-        if es_three_white_soldiers(df, idx): return True, "Buy", "Three White Soldiers", log_zonas
+        if es_three_white_soldiers(df, idx, rsi_actual): return True, "Buy", "Three White Soldiers", log_zonas
 
-    # --- PATRONES DE VENTA (SIN RESTRICCIÓN DE MICRO-TENDENCIA) ---
     if en_zona_venta:
         if es_shooting_star_nison(df, idx): return True, "Sell", "Nison Shooting Star", log_zonas
         if es_bearish_engulfing_nison(df, idx): return True, "Sell", "Nison Bearish Engulfing", log_zonas
         if es_dark_cloud_nison(df, idx): return True, "Sell", "Nison Dark Cloud Cover", log_zonas
         if es_evening_star_nison(df, idx): return True, "Sell", "Nison Evening Star", log_zonas
         if es_tweezer_top_nison(df, idx): return True, "Sell", "Nison Tweezer Tops", log_zonas
-        if es_three_black_crows(df, idx): return True, "Sell", "Three Black Crows", log_zonas
+        if es_three_black_crows(df, idx, rsi_actual): return True, "Sell", "Three Black Crows", log_zonas
 
     return False, None, None, log_zonas
 
@@ -539,8 +818,8 @@ def generar_grafico_entrada(df, decision, soporte, resistencia, slope, intercept
             rect = plt.Rectangle((x_valores[i] - 0.3, cuerpo_y), 0.6, cuerpo_h, color=color_vela, alpha=0.9)
             ax.add_patch(rect)
 
-        ax.axhline(soporte, color='cyan', linestyle='--', linewidth=2, label="Soporte")
-        ax.axhline(resistencia, color='magenta', linestyle='--', linewidth=2, label="Resistencia")
+        ax.axhline(soporte, color='cyan', linestyle='--', linewidth=2, label="Soporte Horiz")
+        ax.axhline(resistencia, color='magenta', linestyle='--', linewidth=2, label="Resistencia Horiz")
 
         linea_tendencia = intercept + slope * x_valores
         desviacion = np.std(closes - linea_tendencia)
@@ -556,21 +835,20 @@ def generar_grafico_entrada(df, decision, soporte, resistencia, slope, intercept
         
         if decision == 'Buy':
             ax.scatter(entrada_x_idx, closes[-2], s=200, marker='^', color='lime', edgecolors='black', zorder=5)
+            ax.axvline(entrada_x_idx, color='lime', linestyle=':', linewidth=2)
         else:
             ax.scatter(entrada_x_idx, closes[-2], s=200, marker='v', color='red', edgecolors='black', zorder=5)
+            ax.axvline(entrada_x_idx, color='red', linestyle=':', linewidth=2)
 
         texto_razones = "\n".join(razones)
         texto_panel = f"OPERACION: {decision.upper()}\nPrecio: {df['close'].iloc[-1]:.2f}\nRSI Contexto: {df['rsi'].iloc[-2]:.1f}\n\nRazones:\n{texto_razones}"
-        
         ax.text(0.02, 0.98, texto_panel, transform=ax.transAxes, fontsize=11, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.85))
 
-        ax.set_title(f"BOT V96.0 - Entrada {decision} Multi-Zona (5m)")
+        ax.set_title(f"BOT V99.0 - Entrada {decision} Espacial (5m)")
         ax.grid(True, alpha=0.2)
         plt.legend(loc="lower right")
         plt.tight_layout()
-        
         return fig
-        
     except Exception as e:
         return None
 
@@ -580,8 +858,6 @@ def generar_grafico_salida(df, trade_data):
         entrada_price = trade_data['entrada']
         salida_price = trade_data['salida']
         pnl_obtenido = trade_data['pnl']
-        motivo_cierre = trade_data['motivo']
-        balance_actual = trade_data['balance']
         
         df_plot = df.copy().tail(120)
         if df_plot.empty: 
@@ -594,7 +870,7 @@ def generar_grafico_salida(df, trade_data):
             else:
                 color_vela = 'red'
                 
-            ax.plot([i, i], [row['low'], row['high']], color='black', linewidth=1)
+            ax.plot([i, i],[row['low'], row['high']], color='black', linewidth=1)
             ax.plot([i, i],[row['open'], row['close']], color=color_vela, linewidth=6)
 
         ax.axhline(entrada_price, color='blue', linestyle='--', linewidth=1.5, label='Nivel Entrada')
@@ -611,55 +887,40 @@ def generar_grafico_salida(df, trade_data):
             
         ax.scatter([indice_salida_x],[salida_price], s=200, c=color_marcador, marker=forma, edgecolors='black', zorder=5)
 
-        texto_panel = f"CIERRE {decision_original}\nMotivo: {motivo_cierre}\nPnL: {pnl_obtenido:.4f} USD\nBalance: {balance_actual:.2f} USD"
+        texto_panel = f"CIERRE {decision_original}\nMotivo: {trade_data['motivo']}\nPnL: {pnl_obtenido:.4f} USD\nBalance: {trade_data['balance']:.2f} USD"
         ax.text(0.02, 0.95, texto_panel, transform=ax.transAxes, fontsize=12, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
 
-        ax.set_title("BOT V96.0 - DETALLE DE CIERRE")
+        ax.set_title("BOT V99.0 - DETALLE DE CIERRE ACELERADO")
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
-        
         return fig
-        
     except Exception as e:
         return None
 
-def log_colab(df, tendencia, slope, soporte, resistencia, decision, razones, log_zonas, idx=-2):
+    def log_colab(df, tendencia, slope, soporte, resistencia, decision, razones, log_zonas, idx=-2):
     ahora = datetime.now(timezone.utc)
-    precio = df['close'].iloc[idx]
-    
     print("="*100)
-    print(f"🕒 {ahora} | 💰 Precio Cerrado: {precio:.2f}")
-    
+    print(f"🕒 {ahora} | 💰 Precio Cerrado Evaluado: {df['close'].iloc[idx]:.2f}")
     if log_zonas:
-        print(f"🔎 Zonas COMPRA Activas: {log_zonas.get('zonas_compra')} | VENTA: {log_zonas.get('zonas_venta')}")
-        print(f"🔎 Micro Tendencia Real (Rango Swing): {log_zonas.get('micro_tendencia').upper()} (Tolerancia Zona: {log_zonas.get('tolerancia', 0):.2f} USD)")
-        
+        pos_rango = log_zonas.get('posicion_rango', 0)
+        print(f"🏢 Posición en el Rango: {pos_rango*100:.1f}% (0%=Suelo, 100%=Techo)")
+        print(f"🔎 Zonas de COMPRA Válidas: {log_zonas.get('zonas_compra')}")
+        print(f"🔎 Zonas de VENTA Válidas: {log_zonas.get('zonas_venta')}")
+    
     if decision:
-        print(f"🎯 DECISIÓN: {decision.upper()}")
+        print(f"🎯 DECISIÓN TOMADA: {decision.upper()}")
     else:
-        print(f"🎯 DECISIÓN: NO TRADE")
+        print(f"🎯 DECISIÓN TOMADA: MANTENER AL MARGEN (NO TRADE)")
         
     for razon in razones: 
-        print(f"🧠 Lógica: {razon}")
+        print(f"🧠 {razon}")
     print("="*100)
 
 # ======================================================
-# MOTOR FINANCIERO Y GESTIÓN
+# MOTOR FINANCIERO Y GESTIÓN (TRAILING ACELERADO V99)
 # ======================================================
 def paper_abrir_posicion(decision, precio, atr, razones, tiempo):
-    global PAPER_POSICION_ACTIVA
-    global PAPER_PRECIO_ENTRADA
-    global PAPER_SL
-    global PAPER_TP1
-    global PAPER_TP2
-    global PAPER_SIZE_USD
-    global PAPER_SIZE_BTC
-    global PAPER_SIZE_BTC_RESTANTE
-    global PAPER_DECISION_ACTIVA
-    global PAPER_PARTIAL_ACTIVADO
-    global PAPER_TP1_EJECUTADO
-    global PAPER_PNL_PARCIAL
-    
+    global PAPER_POSICION_ACTIVA, PAPER_PRECIO_ENTRADA, PAPER_SL, PAPER_TP1, PAPER_SIZE_USD, PAPER_SIZE_BTC, PAPER_SIZE_BTC_RESTANTE, PAPER_DECISION_ACTIVA, PAPER_PARTIAL_ACTIVADO, PAPER_TP1_EJECUTADO, PAPER_PNL_PARCIAL
     if PAPER_POSICION_ACTIVA is not None: 
         return False
 
@@ -675,7 +936,6 @@ def paper_abrir_posicion(decision, precio, atr, razones, tiempo):
         return False
     
     distancia_riesgo = abs(precio - sl)
-    
     if distancia_riesgo == 0: 
         return False
 
@@ -687,17 +947,14 @@ def paper_abrir_posicion(decision, precio, atr, razones, tiempo):
     else:
         size_real = size_en_dolares_ideal
         
-    size_en_cripto_real = size_real / precio
-    
     PAPER_POSICION_ACTIVA = decision
     PAPER_DECISION_ACTIVA = decision
     PAPER_PRECIO_ENTRADA = precio
     PAPER_SL = sl
     PAPER_TP1 = tp1
-    PAPER_TP2 = None  
     PAPER_SIZE_USD = size_real
-    PAPER_SIZE_BTC = size_en_cripto_real
-    PAPER_SIZE_BTC_RESTANTE = size_en_cripto_real
+    PAPER_SIZE_BTC = size_real / precio
+    PAPER_SIZE_BTC_RESTANTE = PAPER_SIZE_BTC
     PAPER_PARTIAL_ACTIVADO = True
     PAPER_TP1_EJECUTADO = False
     PAPER_PNL_PARCIAL = 0.0
@@ -705,22 +962,7 @@ def paper_abrir_posicion(decision, precio, atr, razones, tiempo):
     return True
 
 def paper_revisar_sl_tp(df):
-    global PAPER_SL
-    global PAPER_TP1
-    global PAPER_PRECIO_ENTRADA
-    global PAPER_DECISION_ACTIVA
-    global PAPER_POSICION_ACTIVA
-    global PAPER_BALANCE
-    global PAPER_PNL_GLOBAL
-    global PAPER_TRADES_TOTALES
-    global PAPER_ULTIMO_RESULTADO
-    global PAPER_ULTIMO_PNL
-    global PAPER_SIZE_BTC
-    global PAPER_SIZE_BTC_RESTANTE
-    global PAPER_TP1_EJECUTADO
-    global PAPER_WIN
-    global PAPER_LOSS
-    global PAPER_PNL_PARCIAL
+    global PAPER_SL, PAPER_TP1, PAPER_PRECIO_ENTRADA, PAPER_DECISION_ACTIVA, PAPER_POSICION_ACTIVA, PAPER_BALANCE, PAPER_PNL_GLOBAL, PAPER_TRADES_TOTALES, PAPER_ULTIMO_RESULTADO, PAPER_ULTIMO_PNL, PAPER_SIZE_BTC, PAPER_SIZE_BTC_RESTANTE, PAPER_TP1_EJECUTADO, PAPER_WIN, PAPER_LOSS, PAPER_PNL_PARCIAL
 
     if PAPER_POSICION_ACTIVA is None: 
         return None
@@ -733,6 +975,9 @@ def paper_revisar_sl_tp(df):
     cerrar_total = False
     motivo = None
 
+    # ==========================
+    # LÓGICA DE COMPRA (LONG)
+    # ==========================
     if PAPER_POSICION_ACTIVA == "Buy":
         if PAPER_TP1_EJECUTADO == False:
             if high >= PAPER_TP1:
@@ -742,19 +987,35 @@ def paper_revisar_sl_tp(df):
                 PAPER_SIZE_BTC_RESTANTE = PAPER_SIZE_BTC * (1 - PORCENTAJE_CIERRE)
                 PAPER_TP1_EJECUTADO = True
                 PAPER_SL = PAPER_PRECIO_ENTRADA 
-                telegram_mensaje(f"🎯 TP1 ALCANZADO (+{PAPER_PNL_PARCIAL:.2f} USD). SL a Break Even. Iniciando Trailing...")
+                telegram_mensaje(f"🎯 TP1 ALCANZADO (+{PAPER_PNL_PARCIAL:.2f} USD). SL a Break Even. Iniciando Trailing Acelerado...")
 
         if PAPER_TP1_EJECUTADO == True:
-            if close - (atr_actual * MULT_TRAILING) > PAPER_SL: 
-                PAPER_SL = close - (atr_actual * MULT_TRAILING)
+            # ACELERADOR DINÁMICO DE TRAILING
+            distancia_a_favor = close - PAPER_PRECIO_ENTRADA
+            atrs_ganados = distancia_a_favor / atr_actual
+            
+            if atrs_ganados >= 5.0:
+                multiplicador_dinamico = 0.8  # Aprieta el SL para proteger mega rally
+            elif atrs_ganados >= 3.0:
+                multiplicador_dinamico = 1.2  # Ajuste medio
+            else:
+                multiplicador_dinamico = MULT_TRAILING_BASE
+                
+            nuevo_sl = close - (atr_actual * multiplicador_dinamico)
+            
+            if nuevo_sl > PAPER_SL: 
+                PAPER_SL = nuevo_sl 
 
         if low <= PAPER_SL:
             cerrar_total = True
             if PAPER_TP1_EJECUTADO == True:
-                motivo = "Trailing Dinámico" 
+                motivo = "Trailing Acelerado Dinámico" 
             else:
                 motivo = "Stop Loss"
 
+    # ==========================
+    # LÓGICA DE VENTA (SHORT)
+    # ==========================
     elif PAPER_POSICION_ACTIVA == "Sell":
         if PAPER_TP1_EJECUTADO == False:
             if low <= PAPER_TP1:
@@ -764,16 +1025,29 @@ def paper_revisar_sl_tp(df):
                 PAPER_SIZE_BTC_RESTANTE = PAPER_SIZE_BTC * (1 - PORCENTAJE_CIERRE)
                 PAPER_TP1_EJECUTADO = True
                 PAPER_SL = PAPER_PRECIO_ENTRADA 
-                telegram_mensaje(f"🎯 TP1 ALCANZADO (+{PAPER_PNL_PARCIAL:.2f} USD). SL a Break Even. Iniciando Trailing...")
+                telegram_mensaje(f"🎯 TP1 ALCANZADO (+{PAPER_PNL_PARCIAL:.2f} USD). SL a Break Even. Iniciando Trailing Acelerado...")
 
         if PAPER_TP1_EJECUTADO == True:
-            if close + (atr_actual * MULT_TRAILING) < PAPER_SL: 
-                PAPER_SL = close + (atr_actual * MULT_TRAILING)
+            # ACELERADOR DINÁMICO DE TRAILING
+            distancia_a_favor = PAPER_PRECIO_ENTRADA - close
+            atrs_ganados = distancia_a_favor / atr_actual
+            
+            if atrs_ganados >= 5.0:
+                multiplicador_dinamico = 0.8  
+            elif atrs_ganados >= 3.0:
+                multiplicador_dinamico = 1.2  
+            else:
+                multiplicador_dinamico = MULT_TRAILING_BASE
+                
+            nuevo_sl = close + (atr_actual * multiplicador_dinamico)
+            
+            if nuevo_sl < PAPER_SL: 
+                PAPER_SL = nuevo_sl 
 
         if high >= PAPER_SL:
             cerrar_total = True
             if PAPER_TP1_EJECUTADO == True:
-                motivo = "Trailing Dinámico" 
+                motivo = "Trailing Acelerado Dinámico" 
             else:
                 motivo = "Stop Loss"
 
@@ -819,16 +1093,7 @@ def paper_revisar_sl_tp(df):
         PAPER_PNL_PARCIAL = 0.0
 
         telegram_mensaje(f"📤 TRADE CERRADO: Salida por {motivo}.\n💵 G/P Neta: {pnl_total_trade:.2f} USD\n📊 Balance Actual: {PAPER_BALANCE:.2f} USD\nWinrate: {winrate:.1f}%")
-        
-        datos_retorno = {
-            "decision": dec, 
-            "motivo": motivo, 
-            "entrada": ent, 
-            "salida": sal, 
-            "pnl": pnl_total_trade, 
-            "balance": PAPER_BALANCE
-        }
-        return datos_retorno
+        return {"decision": dec, "motivo": motivo, "entrada": ent, "salida": sal, "pnl": pnl_total_trade, "balance": PAPER_BALANCE}
 
     return None
 
@@ -841,7 +1106,6 @@ def risk_management_check():
     global PAPER_CONSECUTIVE_LOSSES
     
     hoy_utc = datetime.now(timezone.utc).date()
-    
     if PAPER_CURRENT_DAY != hoy_utc:
         PAPER_CURRENT_DAY = hoy_utc
         PAPER_DAILY_START_BALANCE = PAPER_BALANCE
@@ -849,13 +1113,11 @@ def risk_management_check():
         PAPER_CONSECUTIVE_LOSSES = 0
         
     porcentaje_drawdown = (PAPER_BALANCE - PAPER_DAILY_START_BALANCE) / PAPER_DAILY_START_BALANCE
-    
     if porcentaje_drawdown <= -MAX_DAILY_DRAWDOWN_PCT:
         if PAPER_STOPPED_TODAY == False:
             telegram_mensaje(f"🛑 PROTECCIÓN DE CAPITAL: Drawdown máximo alcanzado. Bot pausado.")
             PAPER_STOPPED_TODAY = True
         return False
-        
     return True
 
 # ======================================================
@@ -874,27 +1136,25 @@ class InstitutionalStats:
     def register_trade(self, result_rr, partial=False):
         self.total_trades += 1
         self.total_rr += result_rr
-        
-        if partial == True: 
+        if partial: 
             self.partial_wins += 1
         elif result_rr > 0: 
             self.wins += 1
         else: 
             self.losses += 1
-            
         self.equity_curve.append(self.total_rr)
 
     def winrate(self):
-        if self.total_trades == 0: 
+        if self.total_trades > 0:
+            return (self.wins / self.total_trades) * 100 
+        else:
             return 0.0
-        tasa = (self.wins / self.total_trades) * 100
-        return tasa
 
     def avg_rr(self):
-        if self.total_trades == 0: 
+        if self.total_trades > 0:
+            return self.total_rr / self.total_trades 
+        else:
             return 0.0
-        promedio = self.total_rr / self.total_trades
-        return promedio
 
 class ExternalBOSDetector:
     def __init__(self, lookback=50):
@@ -903,111 +1163,56 @@ class ExternalBOSDetector:
     def detect_swings(self, df):
         altos = df['high'].values
         bajos = df['low'].values
-        
         swing_alto_reciente = max(altos[-self.lookback:])
         swing_bajo_reciente = min(bajos[-self.lookback:])
-        
-        self.last_swing_high = swing_alto_reciente
-        self.last_swing_low = swing_bajo_reciente
-        
         return swing_alto_reciente, swing_bajo_reciente
 
     def is_bos_externo(self, df):
-        alto_estructural, bajo_estructural = self.detect_swings(df)
-        cierre_actual = df['close'].iloc[-1]
+        alto_est, bajo_est = self.detect_swings(df)
+        cierre = df['close'].iloc[-1]
         
-        if cierre_actual > alto_estructural:
-            ruptura_al_alza = True
+        if cierre > alto_est:
+            rup_alza = True
         else:
-            ruptura_al_alza = False
+            rup_alza = False
             
-        if cierre_actual < bajo_estructural:
-            ruptura_a_la_baja = True
+        if cierre < bajo_est:
+            rup_baja = True
         else:
-            ruptura_a_la_baja = False
+            rup_baja = False
             
-        return ruptura_al_alza, ruptura_a_la_baja, alto_estructural, bajo_estructural
+        return rup_alza, rup_baja, alto_est, bajo_est
 
 class PullbackValidator:
     def __init__(self, tolerance=0.3):
         self.tolerance = tolerance
 
-    def es_pullback_valido(self, df, nivel_estructura, direccion):
-        precio_vela_actual = df['close'].iloc[-1]
-        
+    def es_pullback_valido(self, df, nivel, direccion):
+        precio = df['close'].iloc[-1]
         if direccion == "long":
-            tolerancia_valor = self.tolerance / 100
-            zona_aceptable = nivel_estructura * (1 - tolerancia_valor)
-            if precio_vela_actual <= zona_aceptable:
+            if precio <= nivel * (1 - self.tolerance / 100):
                 return True
-            else:
-                return False
-                
+            return False
         if direccion == "short":
-            tolerancia_valor = self.tolerance / 100
-            zona_aceptable = nivel_estructura * (1 + tolerancia_valor)
-            if precio_vela_actual >= zona_aceptable:
+            if precio >= nivel * (1 + self.tolerance / 100):
                 return True
-            else:
-                return False
-                
+            return False
         return False
 
 class PartialTPManager:
     def __init__(self):
         self.tp1_hit = False
         self.tp2_hit = False
-
-    def gestionar_tp_parcial(self, entry, tp1, tp2, price, side):
-        resultado = {
-            "cerrar_50": False, 
-            "cerrar_total": False, 
-            "evento": None
-        }
         
-        if side == "long":
-            if self.tp1_hit == False and price >= tp1:
-                self.tp1_hit = True
-                resultado["cerrar_50"] = True
-                resultado["evento"] = "El TP1 ha sido alcanzado. Cerramos el 50%."
-            elif price >= tp2:
-                self.tp2_hit = True
-                resultado["cerrar_total"] = True
-                resultado["evento"] = "El TP2 ha sido alcanzado. Cerramos todo."
-                
-        if side == "short":
-            if self.tp1_hit == False and price <= tp1:
-                self.tp1_hit = True
-                resultado["cerrar_50"] = True
-                resultado["evento"] = "El TP1 ha sido alcanzado. Cerramos el 50%."
-            elif price <= tp2:
-                self.tp2_hit = True
-                resultado["cerrar_total"] = True
-                resultado["evento"] = "El TP2 ha sido alcanzado. Cerramos todo."
-                
-        return resultado
+    def gestionar_tp_parcial(self, entry, tp1, tp2, price, side):
+        return {"cerrar_50": False, "cerrar_total": False, "evento": None} 
 
 class InstitutionalLogger:
     def __init__(self, telegram_send_func):
         self.send_telegram = telegram_send_func
-
+        
     def log_operacion_completa(self, data):
-        texto_log = f"""
-📊 REPORTE DE SISTEMA INSTITUCIONAL EXTERNO
-
-🧠 Análisis de Bloque Estructural:
-📈 Dirección Proyectada: {data.get('direccion')}
-💰 Nivel de Entrada Teórico: {data.get('entry')}
-🎯 Nivel TP1 Teórico: {data.get('tp1')}
-🎯 Nivel TP2 Teórico: {data.get('tp2')}
-🛑 Nivel SL Teórico: {data.get('sl')}
-
-📊 Ratio Riesgo/Beneficio: {data.get('rr')}
-🏆 Tasa de Éxito Actual: {data.get('winrate'):.2f}%
-📉 Promedio R/R: {data.get('avg_rr'):.2f}
-🔢 Cantidad de Operaciones: {data.get('total_trades')}
-"""
-        self.send_telegram(texto_log)
+        self.send_telegram("📊 REPORTE DE SISTEMA INSTITUCIONAL EXTERNO")
 
 class InstitutionalSecondarySystem:
     def __init__(self, telegram_send_func):
@@ -1017,51 +1222,11 @@ class InstitutionalSecondarySystem:
         self.stats = InstitutionalStats()
         self.logger = InstitutionalLogger(telegram_send_func)
 
-    def evaluar_confirmacion_institucional(self, df):
-        bos_alcista, bos_bajista, alto, bajo = self.bos_detector.is_bos_externo(df)
-        
-        datos_confirmacion = {
-            "confirmado": False, 
-            "direccion": None, 
-            "nivel_estructura": None
-        }
-        
-        if bos_alcista == True:
-            datos_confirmacion["confirmado"] = True
-            datos_confirmacion["direccion"] = "long"
-            datos_confirmacion["nivel_estructura"] = alto
-            
-        elif bos_bajista == True:
-            datos_confirmacion["confirmado"] = True
-            datos_confirmacion["direccion"] = "short"
-            datos_confirmacion["nivel_estructura"] = bajo
-            
-        return datos_confirmacion
-
-    def validar_pullback(self, df, direccion, nivel):
-        valido = self.pullback_validator.es_pullback_valido(df, nivel, direccion)
-        return valido
-
-    def gestionar_trade_vivo(self, entry, tp1, tp2, price, side):
-        gestion = self.tp_manager.gestionar_tp_parcial(entry, tp1, tp2, price, side)
-        return gestion
-
-    def registrar_resultado(self, rr, parcial=False):
-        self.stats.register_trade(rr, parcial)
-
-    def enviar_log_completo(self, trade_data):
-        trade_data["winrate"] = self.stats.winrate()
-        trade_data["avg_rr"] = self.stats.avg_rr()
-        trade_data["total_trades"] = self.stats.total_trades
-        self.logger.log_operacion_completa(trade_data)
-
 # ======================================================
-# LOOP PRINCIPAL Y ANTI-SPAM
+# LOOP PRINCIPAL 
 # ======================================================
 def run_bot():
-    mensaje_inicio = "🤖 BOT V96.0 BYBIT REAL INICIADO.\nConfiguración FLUID SNIPER (5m MULTI-ZONA).\nRestricción de Micro-Tendencia Eliminada de los Patrones."
-    telegram_mensaje(mensaje_inicio)
-    
+    telegram_mensaje("🤖 BOT V99.0 BYBIT REAL INICIADO.\nPolaridad Activa y Trailing Dinámico Acelerado.")
     sistema_institucional = InstitutionalSecondarySystem(telegram_mensaje)
     ultima_vela_operada = None
 
@@ -1075,13 +1240,13 @@ def run_bot():
             precio_mercado = df['close'].iloc[-1] 
             tiempo_vela_cerrada = df.index[-2] 
 
-            # Detección integral unificada
-            soporte_horiz, resistencia_horiz, canal_sup, canal_inf, slope, intercept, tendencia_macro = detectar_zonas_mercado(df, idx_eval)
+            # Detección integral con POLARIDAD V99.0
+            soporte_horiz, resistencia_horiz, canal_sup, canal_inf, slope, intercept, tendencia_macro, max_previo, min_previo = detectar_zonas_mercado(df, idx_eval)
             
             razones_para_entrar =[]
             
             if PAPER_POSICION_ACTIVA is None:
-                patron_detectado, decision_final, nombre_patron, log_zonas = detectar_patron_nison(df, soporte_horiz, resistencia_horiz, canal_sup, canal_inf, idx=idx_eval)
+                patron_detectado, decision_final, nombre_patron, log_zonas = detectar_patron_nison(df, soporte_horiz, resistencia_horiz, canal_sup, canal_inf, tendencia_macro, max_previo, min_previo, idx=idx_eval)
 
                 if ultima_vela_operada == tiempo_vela_cerrada:
                     decision_final = None
@@ -1105,17 +1270,12 @@ def run_bot():
                         zonas_activadas = log_zonas.get('zonas_venta')
                         
                     razones_para_entrar.append(f"Patrón Validado: {nombre_patron}")
-                    razones_para_entrar.append(f"Rebote Confirmado en: {zonas_activadas}")
+                    razones_para_entrar.append(f"Zonas de Rechazo: {zonas_activadas}")
                     
-                    riesgo_valido = risk_management_check()
-                    
-                    if riesgo_valido == True:
-                        atr_entrada = df['atr'].iloc[-1]
-                        apertura = paper_abrir_posicion(decision_final, precio_mercado, atr_entrada, razones_para_entrar, df.index[-1])
-                        
-                        if apertura == True:
+                    if risk_management_check():
+                        apertura = paper_abrir_posicion(decision_final, precio_mercado, df['atr'].iloc[-1], razones_para_entrar, df.index[-1])
+                        if apertura:
                             ultima_vela_operada = tiempo_vela_cerrada
-                            
                             texto = f"📌 OPERACIÓN {decision_final.upper()} (5m)\n💰 Entrada: {precio_mercado:.2f}\n📍 SL: {PAPER_SL:.2f} | TP1: {PAPER_TP1:.2f}\n🧠 {', '.join(razones_para_entrar)}"
                             telegram_mensaje(texto)
                             
@@ -1133,9 +1293,9 @@ def run_bot():
                         plt.close(fig_salida)
 
         except Exception as e:
-            texto_error = f"🚨 ERROR CRÍTICO EN EL SISTEMA: {e}"
-            print(texto_error)
+            print(f"🚨 ERROR CRÍTICO EN EL SISTEMA: {e}")
             time.sleep(60)
 
 if __name__ == '__main__':
     run_bot()
+            return False

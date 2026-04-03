@@ -284,6 +284,8 @@ def cierre_fuerte(row, direccion):
         if row['close'] <= (row['high'] - (rango * 0.45)):
             return True
         else:
+            return False
+
 # ======================================================
 # 🕯️ ARSENAL NISON (SIN BLOQUEOS / 100% EXPANDIDO)
 # ======================================================
@@ -632,7 +634,7 @@ def es_three_black_crows(df, idx, rsi_actual):
             return True
     return False
 
-    # === DETECTOR MAESTRO NISON MULTI-ZONA (CON POLARIDAD) ===
+# === DETECTOR MAESTRO NISON MULTI-ZONA (CON POLARIDAD) ===
 def detectar_patron_nison(df, sop_horiz, res_horiz, canal_sup, canal_inf, tendencia_macro, max_previo, min_previo, idx=-2):
     if len(df) < 15: 
         return False, None, None, {}
@@ -897,7 +899,7 @@ def generar_grafico_salida(df, trade_data):
     except Exception as e:
         return None
 
-    def log_colab(df, tendencia, slope, soporte, resistencia, decision, razones, log_zonas, idx=-2):
+def log_colab(df, tendencia, slope, soporte, resistencia, decision, razones, log_zonas, idx=-2):
     ahora = datetime.now(timezone.utc)
     print("="*100)
     print(f"🕒 {ahora} | 💰 Precio Cerrado Evaluado: {df['close'].iloc[idx]:.2f}")
@@ -1298,4 +1300,3 @@ def run_bot():
 
 if __name__ == '__main__':
     run_bot()
-            return False

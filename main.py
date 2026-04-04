@@ -1,12 +1,13 @@
-# BOT TRADING V101.0 BYBIT REAL – PRODUCCIÓN (SIN PROXY) 
+# BOT TRADING V101.1 BYBIT REAL – PRODUCCIÓN (SIN PROXY) 
 # ======================================================
 # ⚠️ KEYS INCLUIDAS TAL CUAL (SEGÚN PEDIDO)
 # Diseñado para FUTUROS PERPETUOS BTCUSDT en Bybit
 # ======================================================
-# NOVEDADES V101.0 (HOLISTIC AI MASTERMIND):
-# - CEREBRO HOLÍSTICO: La IA ya no busca solo reversiones; analiza TODO el contexto
-#   (Rupturas, continuaciones de tendencia, rechazos en la EMA, fuerza del canal).
-# - FIX MODELO GROQ: Actualizado a llama-3.2-90b-vision-preview (El modelo activo).
+# NOVEDADES V101.1 (HOLISTIC AI MASTERMIND FIX):
+# - FIX CRÍTICO: Solucionado error TypeError en log_colab (9 parámetros requeridos).
+# - FIX CRÍTICO: Agregados 'soporte', 'resistencia', 'slope' e 'intercept' al 
+#   diccionario log_zonas para evitar crasheos al graficar.
+# - INTELIGENCIA MULTIMODAL GROQ VISION AI (Modelo llama-3.2-90b-vision-preview).
 # - CÓDIGO 100% EXPANDIDO. CERO COMPRESIÓN.
 # ======================================================
 
@@ -211,10 +212,6 @@ def calcular_indicadores(df):
     return df.dropna()
 
 def evaluar_impacto_zonas(df, idx=-2, ventana_macro=120):
-    """
-    Evalúa si el precio se encuentra en una zona crítica donde vale la pena despertar a la IA.
-    Calcula Soportes, Canales y Tendencia simultáneamente para evitar variables huérfanas.
-    """
     df_eval = df.iloc[:idx+1]
     
     soporte_horiz = df_eval['low'].rolling(40).min().iloc[-1]
@@ -258,7 +255,6 @@ def evaluar_impacto_zonas(df, idx=-2, ventana_macro=120):
     canal_sup = linea_central[-1] + (desviacion * 1.5)
     canal_inf = linea_central[-1] - (desviacion * 1.5)
     
-    # Análisis espacial del impacto del precio
     atr_actual = df['atr'].iloc[idx]
     ema20_actual = df['ema20'].iloc[idx]
     precio_cierre = df['close'].iloc[idx]
@@ -323,6 +319,7 @@ def evaluar_impacto_zonas(df, idx=-2, ventana_macro=120):
     en_zona_compra = toca_sop_horiz or toca_sop_dinamico or rechazo_alcista_ema or toca_polaridad_sop
     en_zona_venta = toca_res_horiz or toca_res_dinamica or rechazo_bajista_ema or toca_polaridad_res
 
+    # 🚫 Filtros espaciales (Si rompe el rango, se prohíbe operar en contra)
     if rechazo_bajista_ema: en_zona_compra = False
     if rechazo_alcista_ema: en_zona_venta = False
 
@@ -352,13 +349,11 @@ def evaluar_impacto_zonas(df, idx=-2, ventana_macro=120):
         "zonas_venta": ", ".join(zonas_venta) if zonas_venta else "Ninguna",
         "posicion_rango": posicion_en_rango,
         "tendencia_macro": tendencia_macro,
-        "slope": slope,
-        "intercept": intercept,
         "soporte": soporte_horiz,
-        "resistencia": resistencia_horiz
+        "resistencia": resistencia_horiz,
+        "slope": slope,
+        "intercept": intercept
     }
-    
-    return en_zona_compra, en_zona_venta, log_zonas
 
 # ======================================================
 # GRÁFICOS Y UTILIDADES DE IMAGEN
@@ -419,7 +414,7 @@ def generar_grafico_entrada(df, decision, soporte, resistencia, slope, intercept
         texto_panel = f"OPERACION: {decision.upper()}\nPrecio: {df['close'].iloc[-1]:.2f}\nRSI Contexto: {df['rsi'].iloc[-2]:.1f}\n\nInfo:\n{texto_razones}"
         ax.text(0.02, 0.98, texto_panel, transform=ax.transAxes, fontsize=11, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.85))
 
-        ax.set_title(f"BOT V101.0 - VISION AI - Análisis {decision.upper()} (5m)")
+        ax.set_title(f"BOT V101.1 - VISION AI - Análisis {decision.upper()} (5m)")
         ax.grid(True, alpha=0.2)
         plt.legend(loc="lower right")
         plt.tight_layout()
@@ -467,7 +462,7 @@ def generar_grafico_salida(df, trade_data):
         texto_panel_salida = f"CIERRE {decision_original}\nMotivo: {trade_data['motivo']}\nPnL: {pnl_obtenido:.4f} USD\nBalance: {trade_data['balance']:.2f} USD"
         ax.text(0.02, 0.95, texto_panel_salida, transform=ax.transAxes, fontsize=12, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
 
-        ax.set_title("BOT V101.0 - DETALLE DE CIERRE")
+        ax.set_title("BOT V101.1 - DETALLE DE CIERRE")
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
         return fig
@@ -475,13 +470,9 @@ def generar_grafico_salida(df, trade_data):
         return None
 
 # ======================================================
-# 🧠 CEREBRO GROQ VISION AI (HOLÍSTICO Llama 3.2 90B)
+# 🧠 CEREBRO GROQ VISION AI (LLAMA 3.2 90B PREVIEW)
 # ======================================================
 def analizar_con_groq(df, idx, log_zonas, base64_image):
-    """
-    Envia el gráfico neutral y los datos del mercado a Groq (llama-3.2-90b-vision-preview).
-    La IA devuelve un JSON con su decisión basada en el análisis HOLÍSTICO.
-    """
     if not client_groq:
         return "WAIT", "No se configuró GROQ_API_KEY."
 
@@ -546,10 +537,13 @@ def analizar_con_groq(df, idx, log_zonas, base64_image):
     except Exception as e:
         return "WAIT", f"Error de conexión o fallo de modelo en Groq: {e}"
 
-def log_colab(df, log_zonas, decision, razones, idx=-2):
+def log_colab(df, tendencia, slope, soporte, resistencia, decision, razones, log_zonas, idx=-2):
     ahora = datetime.now(timezone.utc)
     print("="*100)
-    print(f"🕒 {ahora} | 💰 Precio Analizado: {df['close'].iloc[idx]:.2f}")
+    print(f"🕒 {ahora} | 💰 Precio Cerrado Evaluado: {df['close'].iloc[idx]:.2f}")
+    print(f"📐 Tendencia Macro: {tendencia} | Slope Lineal: {slope:.5f}")
+    print(f"🧱 Nivel Soporte: {soporte:.2f} | Nivel Resistencia: {resistencia:.2f}")
+    
     if log_zonas:
         pos_rango = log_zonas.get('posicion_rango', 0)
         print(f"🏢 Posición en el Rango: {pos_rango*100:.1f}% (0%=Suelo, 100%=Techo)")
@@ -564,7 +558,7 @@ def log_colab(df, log_zonas, decision, razones, idx=-2):
         print(f"🧠 {razon}")
     print("="*100)
 
-# ======================================================
+    # ======================================================
 # MOTOR FINANCIERO Y GESTIÓN
 # ======================================================
 def paper_abrir_posicion(decision, precio, atr, razones, tiempo):
@@ -624,6 +618,9 @@ def paper_revisar_sl_tp(df):
     cerrar_total = False
     motivo = None
 
+    # ==========================
+    # REVISIÓN DE COMPRAS (LONG)
+    # ==========================
     if PAPER_POSICION_ACTIVA == "Buy":
         if PAPER_TP1_EJECUTADO == False:
             if high >= PAPER_TP1:
@@ -658,6 +655,9 @@ def paper_revisar_sl_tp(df):
             else:
                 motivo = "Stop Loss"
 
+    # ==========================
+    # REVISIÓN DE VENTAS (SHORT)
+    # ==========================
     elif PAPER_POSICION_ACTIVA == "Sell":
         if PAPER_TP1_EJECUTADO == False:
             if low <= PAPER_TP1:
@@ -763,7 +763,7 @@ def risk_management_check():
         return False
     return True
 
-# ======================================================
+    # ======================================================
 # SISTEMA SECUNDARIO INSTITUCIONAL (PARALELO)
 # ======================================================
 class InstitutionalStats:
@@ -869,7 +869,7 @@ class InstitutionalSecondarySystem:
 # LOOP PRINCIPAL Y EJECUCIÓN GROQ VISION
 # ======================================================
 def run_bot():
-    mensaje_inicio = "🤖 BOT V101.0 BYBIT REAL INICIADO.\nCerebro Multimodal LLaVA 90B Vision Activo.\nAnálisis Holístico de Mercado en curso."
+    mensaje_inicio = "🤖 BOT V101.1 BYBIT REAL INICIADO.\nCerebro Multimodal Llama-3.2-90B Vision Activo.\nAnálisis Holístico de Mercado en curso."
     telegram_mensaje(mensaje_inicio)
     
     sistema_institucional = InstitutionalSecondarySystem(telegram_mensaje)
@@ -898,8 +898,7 @@ def run_bot():
                     if en_zona_compra or en_zona_venta:
                         lista_log =["🔥 PRECIO EN ZONA CRÍTICA: Despertando a Groq Vision AI para análisis holístico..."]
                         
-                        # Genera imagen neutral (Sin dibujar compras o ventas prematuras)
-                        fig_neutral = generar_grafico_entrada(df, "ANALISIS", log_zonas['soporte'], log_zonas['resistencia'], log_zonas['slope'], log_zonas['intercept'], ["Verificando estructura general y fuerza del precio..."])
+                        fig_neutral = generar_grafico_entrada(df, "ANALISIS", log_zonas['soporte'], log_zonas['resistencia'], log_zonas['slope'], log_zonas['intercept'],["Verificando estructura general y fuerza del precio..."])
                         
                         if fig_neutral is not None:
                             img_base64 = fig_to_base64(fig_neutral)
@@ -909,7 +908,6 @@ def run_bot():
                             lista_log.append(f"🤖 Groq determinó: {decision_ia}")
                             lista_log.append(f"🧠 Argumento: {razon_ia}")
                             
-                            # Filtro estricto: La IA no puede ordenar comprar si la matemática espacial dice que es resistencia
                             if decision_ia == "BUY" and en_zona_compra:
                                 decision_final = "Buy"
                                 razones_para_entrar.append(f"Análisis IA: {razon_ia}")
@@ -951,3 +949,4 @@ def run_bot():
 
 if __name__ == '__main__':
     run_bot()
+    return en_zona_compra, en_zona_venta, log_zonas

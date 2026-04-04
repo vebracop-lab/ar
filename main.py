@@ -1,4 +1,4 @@
-# BOT TRADING V97.0 BYBIT REAL – PRODUCCIÓN (SIN PROXY) 
+# BOT TRADING V97.0 BYBIT REAL – GEMINI IA (RAILWAY READY)
 # ======================================================
 # ⚠️ IA GEMINI INTEGRADA: Toma de decisiones basada en 
 # análisis visual del gráfico y datos de contexto.
@@ -14,22 +14,25 @@ import requests
 import json
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 from scipy.stats import linregress
 from datetime import datetime, timezone
 from PIL import Image
+
+# Configuración crucial para Railway (Servidor sin pantalla)
+import matplotlib
+matplotlib.use('Agg') 
+import matplotlib.pyplot as plt
 
 # ======================================================
 # CONFIGURACIÓN GEMINI API
 # ======================================================
 import google.generativeai as genai
 
-# PON AQUÍ TU API KEY DE GEMINI O USA LA VARIABLE DE ENTORNO
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "TU_API_KEY_DE_GEMINI_AQUI")
+# Railway inyectará la API KEY desde sus Variables de Entorno
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 genai.configure(api_key=GEMINI_API_KEY)
 
-# Usamos el modelo 1.5 Flash por su rapidez y capacidad multimodal (visión + texto)
-# Si prefieres más razonamiento, puedes cambiar a 'gemini-1.5-pro'
+# Usamos el modelo 1.5 Flash (Rápido, económico y con excelente visión)
 modelo_gemini = genai.GenerativeModel('gemini-1.5-flash')
 
 plt.rcParams['figure.figsize'] = (12, 6)
@@ -52,7 +55,7 @@ MULT_TRAILING = 2.0
 PORCENTAJE_CIERRE = 0.5 
 
 # ======================================================
-# PAPER TRADING (ESTADO DE CUENTA)
+# PAPER TRADING (ESTADO DE CUENTA SIMULADA)
 # ======================================================
 PAPER_BALANCE_INICIAL = 100.0
 PAPER_BALANCE = PAPER_BALANCE_INICIAL
@@ -83,8 +86,8 @@ PAPER_CURRENT_DAY = None
 # ======================================================
 BYBIT_API_KEY = os.getenv("BYBIT_API_KEY", "")
 BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET", "")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "TU_TOKEN_TELEGRAM")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "TU_CHAT_ID")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 BASE_URL = "https://api.bybit.com"
 
 # ======================================================
@@ -97,8 +100,8 @@ def telegram_mensaje(texto):
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         payload = {"chat_id": TELEGRAM_CHAT_ID, "text": texto}
         requests.post(url, data=payload, timeout=10)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Error enviando mensaje a Telegram: {e}")
 
 def telegram_grafico(fig):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
@@ -112,8 +115,8 @@ def telegram_grafico(fig):
         datos = {'chat_id': TELEGRAM_CHAT_ID}
         requests.post(url, files=archivos, data=datos, timeout=15)
         buf.close()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Error enviando foto a Telegram: {e}")
 
 # ======================================================
 # DATOS Y TÉCNICO
@@ -208,7 +211,7 @@ def generar_imagen_para_ia(df, soporte, resistencia, slope, intercept):
     if 'ema20' in df_plot.columns:
         ax.plot(x_valores, df_plot['ema20'].values, color='yellow', linewidth=1.5)
 
-    ax.axis('off') # Quitamos los ejes para que la IA se centre en la forma
+    ax.axis('off') 
     plt.tight_layout()
     
     buf = io.BytesIO()
@@ -226,10 +229,7 @@ def analizar_con_gemini(df, imagen, soporte, resistencia, tendencia, idx=-2):
     rsi_actual = df['rsi'].iloc[idx]
     ema_actual = df['ema20'].iloc[idx]
     
-    # Calcular rechazos recientes en la EMA20 (últimas 10 velas)
     toques_ema = df['ema_touch'].iloc[idx-10:idx+1].sum()
-    
-    # Extraer las últimas 5 velas para que la IA vea la formación exacta
     ultimas_velas = df.iloc[idx-4:idx+1][['open', 'high', 'low', 'close']]
     texto_velas = ultimas_velas.to_string()
 
@@ -250,38 +250,33 @@ DATOS DE LAS ÚLTIMAS 5 VELAS (OHLC):
 {texto_velas}
 
 INSTRUCCIONES:
-1. Analiza espacialmente la imagen: observa si el precio está interactuando con la EMA 20 (línea amarilla), el soporte (cyan) o la resistencia (magenta).
-2. Lee los datos de las últimas 5 velas para confirmar si hay un patrón de rechazo, agotamiento, velas martillo, envolventes o pinbars reales (no te inventes patrones).
+1. Analiza espacialmente la imagen: observa si el precio interactúa con la EMA 20 (amarilla), soporte (cyan) o resistencia (magenta).
+2. Lee los datos de las últimas 5 velas para confirmar patrones visuales.
 3. Evalúa si el RSI indica sobrecompra/sobreventa.
 4. Decide si hay una oportunidad de alta probabilidad para entrar en 'Buy', 'Sell', o si es mejor quedarse al margen ('Hold'). Sé conservador.
 
-RESPONDE OBLIGATORIAMENTE Y ÚNICAMENTE EN ESTE FORMATO JSON VALIDO:
+RESPONDE EXCLUSIVAMENTE EN ESTE FORMATO JSON:
 {{
   "decision": "Buy" | "Sell" | "Hold",
   "patron_detectado": "Nombre del patrón visual que identificaste",
   "razones": [
-    "Razon 1 basada en la ubicación respecto a Soporte/Resistencia/EMA",
-    "Razon 2 basada en las velas",
-    "Razon 3 basada en RSI o rechazos"
+    "Razon 1",
+    "Razon 2",
+    "Razon 3"
   ]
 }}
 """
     try:
-        response = modelo_gemini.generate_content([prompt, imagen])
-        respuesta_texto = response.text.strip()
-        
-        # Limpiar posible bloque de markdown de json (```json ... ```)
-        if respuesta_texto.startswith("```json"):
-            respuesta_texto = respuesta_texto.replace("```json", "").replace("```", "").strip()
-        elif respuesta_texto.startswith("```"):
-            respuesta_texto = respuesta_texto.replace("```", "").strip()
-
-        datos_ia = json.loads(respuesta_texto)
+        # AQUÍ OBLIGAMOS A GEMINI A RESPONDER EN JSON
+        response = modelo_gemini.generate_content(
+            [prompt, imagen],
+            generation_config={"response_mime_type": "application/json"}
+        )
+        datos_ia = json.loads(response.text.strip())
         return datos_ia
     except Exception as e:
-        print(f"Error procesando Gemini: {e}")
-        print(f"Respuesta cruda: {response.text if 'response' in locals() else 'N/A'}")
-        return {"decision": "Hold", "patron_detectado": "Error API", "razones": ["Error al consultar Gemini API"]}
+        print(f"🚨 Error procesando Gemini: {e}")
+        return {"decision": "Hold", "patron_detectado": "Error API", "razones": ["Error de conexión con Gemini"]}
 
 # ======================================================
 # GRÁFICA FINAL PARA TELEGRAM (CON FLECHA)
@@ -442,27 +437,23 @@ def paper_revisar_sl_tp(df):
 # LOOP PRINCIPAL
 # ======================================================
 def run_bot():
-    telegram_mensaje("🤖 BOT V97.0 INICIADO: Análisis IA GEMINI Multimodal en vivo.")
+    print("🤖 BOT V97.0 INICIADO: Iniciando conexión con Railway...")
+    telegram_mensaje("🤖 BOT V97.0 INICIADO: Análisis IA GEMINI Multimodal en vivo desde Railway.")
     ultima_vela_operada = None
 
     while True:
-        time.sleep(SLEEP_SECONDS) 
         try:
             df = calcular_indicadores(obtener_velas())
             idx_eval = -2
             precio_mercado = df['close'].iloc[-1] 
             tiempo_vela_cerrada = df.index[-2] 
 
-            # Detección de zonas
             soporte_horiz, resistencia_horiz, canal_sup, canal_inf, slope, intercept, tendencia = detectar_zonas_mercado(df, idx_eval)
             
             if PAPER_POSICION_ACTIVA is None and ultima_vela_operada != tiempo_vela_cerrada:
                 print(f"[{datetime.now(timezone.utc)}] Consultando a Gemini IA...")
                 
-                # 1. Generar la imagen limpia para la IA
                 imagen_ia = generar_imagen_para_ia(df, soporte_horiz, resistencia_horiz, slope, intercept)
-                
-                # 2. Consultar a Gemini (Pasando DataFrame, Imagen e Indicadores)
                 respuesta_ia = analizar_con_gemini(df, imagen_ia, soporte_horiz, resistencia_horiz, tendencia, idx_eval)
                 
                 decision = respuesta_ia.get("decision", "Hold")
@@ -470,7 +461,6 @@ def run_bot():
                 patron = respuesta_ia.get("patron_detectado", "Ninguno")
 
                 print(f"Decisión IA: {decision} | Patrón: {patron}")
-                for r in razones: print(f" - {r}")
 
                 if decision in ["Buy", "Sell"] and risk_management_check():
                     atr_entrada = df['atr'].iloc[-1]
@@ -480,7 +470,6 @@ def run_bot():
                         texto_razones = "\n".join([f"🧠 {r}" for r in razones])
                         telegram_mensaje(f"📌 IA OPERACIÓN {decision.upper()} (5m)\n💰 Precio: {precio_mercado:.2f}\n📍 SL: {PAPER_SL:.2f} | TP1: {PAPER_TP1:.2f}\n👁️ Patrón visto: {patron}\n{texto_razones}")
                         
-                        # Generar el gráfico con la flecha para Telegram
                         fig = generar_grafico_telegram(df, decision, soporte_horiz, resistencia_horiz, razones, patron)
                         telegram_grafico(fig)
                         plt.close(fig)
@@ -488,8 +477,11 @@ def run_bot():
             if PAPER_POSICION_ACTIVA is not None:
                 paper_revisar_sl_tp(df)
 
+            # Esperar antes del siguiente ciclo
+            time.sleep(SLEEP_SECONDS) 
+
         except Exception as e:
-            print(f"🚨 ERROR CRÍTICO: {e}")
+            print(f"🚨 ERROR CRÍTICO EN BUCLE MAIN: {e}")
             time.sleep(60)
 
 if __name__ == '__main__':

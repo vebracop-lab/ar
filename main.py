@@ -51,7 +51,6 @@ def obtener_velas():
 def indicadores(df):
     df['ema20'] = df['close'].ewm(span=20).mean()
 
-    # RSI simplificado
     delta = df['close'].diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
@@ -62,7 +61,6 @@ def indicadores(df):
     rs = avg_gain / avg_loss
     df['rsi'] = 100 - (100 / (1 + rs))
 
-    # ATR
     df['atr'] = (df['high'] - df['low']).rolling(14).mean()
 
     return df.dropna()
@@ -149,31 +147,37 @@ Indicadores:
 - ATR: {ctx['atr']}
 
 Reglas:
-
 - TP1 corto (1:1 aprox)
 - TP2 libre (dejar correr tendencia)
 - SL lógico (estructura)
+- Evita rango sin dirección
+- Prioriza rechazos múltiples
 - Si no hay claridad: NO_TRADE
 """
 
 # ==========================
-# LLAMADA IA
+# IA
 # ==========================
 def decision_ia(prompt):
     try:
         r = client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
-            model="llama3-70b-8192"
+            model="llama-3.1-70b-versatile",
+            temperature=0.2
         )
 
-        respuesta = r.choices[0].message.content
+        respuesta = r.choices[0].message.content.strip()
+
+        if "```" in respuesta:
+            respuesta = respuesta.split("```")[1]
 
         data = json.loads(respuesta)
 
         return data
 
     except Exception as e:
-        print("❌ ERROR IA:", e)
+        print("ERROR IA:", e)
+        print("RAW:", respuesta if 'respuesta' in locals() else "N/A")
         return None
 
 # ==========================
@@ -186,7 +190,7 @@ tp1 = 0
 tp1_hit = False
 
 # ==========================
-# LOOP PRINCIPAL
+# LOOP
 # ==========================
 while True:
     try:
@@ -212,9 +216,6 @@ while True:
             "r_ema": contar_rechazos(df, df['ema20'].iloc[-1], 50)
         }
 
-        # ======================
-        # ENTRADA
-        # ======================
         if posicion is None:
             prompt = construir_prompt(ctx)
             data = decision_ia(prompt)
@@ -230,45 +231,32 @@ while True:
                     tp1 = data["tp1"]
                     tp1_hit = False
 
-                    print("\n🚀 NUEVA OPERACIÓN")
+                    print("\nNUEVA OPERACION")
                     print(data)
 
-        # ======================
-        # GESTIÓN
-        # ======================
         else:
-
-            # TP1 (50%)
             if not tp1_hit:
-                if (posicion == "BUY" and precio >= tp1) or \
-                   (posicion == "SELL" and precio <= tp1):
-
+                if (posicion == "BUY" and precio >= tp1) or (posicion == "SELL" and precio <= tp1):
                     tp1_hit = True
-                    sl = entry  # break even
+                    sl = entry
+                    print("TP1 alcanzado -> SL BE")
 
-                    print("🎯 TP1 alcanzado → SL a BE")
-
-            # TRAILING INFINITO
             if tp1_hit:
                 if posicion == "BUY":
                     nuevo_sl = precio - (ctx["atr"] * 1.2)
                     if nuevo_sl > sl:
                         sl = nuevo_sl
-
-                elif posicion == "SELL":
+                else:
                     nuevo_sl = precio + (ctx["atr"] * 1.2)
                     if nuevo_sl < sl:
                         sl = nuevo_sl
 
-            # CIERRE
-            if (posicion == "BUY" and precio <= sl) or \
-               (posicion == "SELL" and precio >= sl):
-
-                print("📤 CIERRE POR SL / TRAILING")
+            if (posicion == "BUY" and precio <= sl) or (posicion == "SELL" and precio >= sl):
+                print("CIERRE POR TRAILING / SL")
                 posicion = None
 
         time.sleep(SLEEP_SECONDS)
 
     except Exception as e:
-        print("🚨 ERROR:", e)
+        print("ERROR:", e)
         time.sleep(60)

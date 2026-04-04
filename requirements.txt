@@ -4,4 +4,4 @@ pandas
 scipy
 matplotlib
 pillow
-google-generativeai
+groq

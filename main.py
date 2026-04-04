@@ -1,8 +1,9 @@
-# BOT TRADING V99.0 ULTRA-DETALLADO - ACCIÓN DE PRECIO INSTITUCIONAL
 # =====================================================================
-# ⚠️ PROTOTIPO DE ALTA PRECISIÓN: ANTI-ALUCINACIÓN DE IA
-# Prohibida la simplificación. Este código es extenso por diseño.
-# Incluye: Detección de mechas, Cruces de EMA, Gestión de PnL y Logs.
+# BOT TRADING MAESTRO V101.0 - PROTOCOLO DE ANALISIS ESTRUCTURAL TOTAL
+# =====================================================================
+# ⚠️ ESTRICTAMENTE PROHIBIDA LA SIMPLIFICACIÓN O RESUMEN DE CÓDIGO.
+# ⚠️ ENFOQUE: ACCIÓN DE PRECIO (PRICE ACTION) Y RECHAZO DE MECHAS.
+# ⚠️ INTEGRACIÓN: GROQ IA (LLAMA 3.3 70B) + BYBIT V5.
 # =====================================================================
 
 import os
@@ -20,42 +21,53 @@ from scipy.stats import linregress
 from datetime import datetime, timezone
 from PIL import Image
 
-# Configuración para servidores (Railway)
+# Configuración de entorno para ejecución en la nube (Railway/VPS)
 import matplotlib
 matplotlib.use('Agg') 
 import matplotlib.pyplot as plt
 
 # ======================================================
-# CONFIGURACIÓN DE APIS Y MODELO
+# 1. CONFIGURACIÓN DE CONECTIVIDAD (APIs)
 # ======================================================
 from groq import Groq
+
+# Las llaves se cargan desde las variables de entorno del sistema
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 client = Groq(api_key=GROQ_API_KEY)
 MODELO_GROQ = "llama-3.3-70b-versatile"
 
+# Credenciales de Exchange y Mensajería
+BYBIT_API_KEY = os.getenv("BYBIT_API_KEY", "")
+BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET", "")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+BASE_URL = "https://api.bybit.com"
+
 # ======================================================
-# PARÁMETROS TÉCNICOS GLOBALES
+# 2. PARÁMETROS OPERATIVOS ESTRATÉGICOS
 # ======================================================
 SYMBOL = "BTCUSDT"
-INTERVAL = "5"
-LEVERAGE = 10
-RISK_PER_TRADE = 0.02
-SLEEP_SECONDS = 60
+INTERVAL = "5"        # Temporalidad principal: 5 minutos
+LEVERAGE = 10         # Apalancamiento institucional
+RISK_PER_TRADE = 0.02 # Arriesgar el 2% del balance por operación
+SLEEP_SECONDS = 60    # Frecuencia de actualización del bot
 
-# Configuración de Estrategia
-MULT_SL = 1.5
-MULT_TP1 = 2.5
-PORCENTAJE_CIERRE_PARCIAL = 0.5
+# Configuración de Gestión de Salidas (ATR-Based)
+MULT_SL = 1.8         # Stop Loss más holgado para evitar "stop hunts"
+MULT_TP1 = 2.5        # Objetivo de beneficio 1
+MULT_TRAILING = 2.0   # Distancia para el Trailing Stop
+PORCENTAJE_CIERRE_PARCIAL = 0.5 
 
 # ======================================================
-# ESTADO DEL BOT (CONTADORES Y PNL)
+# 3. SISTEMA DE GESTIÓN DE CAPITAL (PAPER TRADING)
 # ======================================================
-PAPER_BALANCE = 100.0
-PAPER_POSICION_ACTIVA = None  # None, 'Buy', 'Sell'
+PAPER_BALANCE_INICIAL = 100.0
+PAPER_BALANCE = PAPER_BALANCE_INICIAL
+PAPER_POSICION_ACTIVA = None # 'Buy', 'Sell', None
 PAPER_PRECIO_ENTRADA = 0.0
 PAPER_SL = 0.0
 PAPER_TP1 = 0.0
-PAPER_TP1_HECHO = False
+PAPER_TP1_LISTO = False
 PAPER_SIZE_BTC = 0.0
 PAPER_TRADES_TOTALES = 0
 PAPER_WIN = 0
@@ -63,297 +75,325 @@ PAPER_LOSS = 0
 PAPER_LAST_10_PNL = []
 
 # ======================================================
-# CREDENCIALES
+# 4. FUNCIONES DE TELEMETRÍA (TELEGRAM)
 # ======================================================
-BYBIT_API_KEY = os.getenv("BYBIT_API_KEY", "")
-BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET", "")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
-
-# ======================================================
-# UTILIDADES DE RED (TELEGRAM)
-# ======================================================
-def enviar_telegram_texto(mensaje):
-    if not TELEGRAM_TOKEN: return
+def telegram_enviar_texto(texto):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": mensaje}, timeout=10)
-    except: pass
+        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": texto, "parse_mode": "Markdown"}
+        requests.post(url, data=payload, timeout=12)
+    except Exception as e:
+        print(f"Error enviando texto a Telegram: {e}")
 
-def enviar_telegram_foto(fig):
-    if not TELEGRAM_TOKEN: return
+def telegram_enviar_grafico(fig):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
     try:
         buf = io.BytesIO()
-        fig.savefig(buf, format='png', bbox_inches='tight', dpi=100)
+        fig.savefig(buf, format='png', bbox_inches='tight', dpi=130)
         buf.seek(0)
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
-        requests.post(url, files={'photo': buf}, data={'chat_id': TELEGRAM_CHAT_ID}, timeout=20)
+        files = {'photo': buf}
+        data = {'chat_id': TELEGRAM_CHAT_ID}
+        requests.post(url, files=files, data=data, timeout=25)
         buf.close()
-    except: pass
+    except Exception as e:
+        print(f"Error enviando gráfico a Telegram: {e}")
 
 # ======================================================
-# MOTOR DE DATOS: EXTRACCIÓN Y CÁLCULO DE "OJOS"
+# 5. MOTOR DE DATOS Y CÁLCULOS TÉCNICOS PROFUNDOS
 # ======================================================
-def obtener_datos_mercado(limit=200):
-    url = "https://api.bybit.com/v5/market/kline"
+def fetch_mercado_data(limit=250):
+    url = f"{BASE_URL}/v5/market/kline"
     params = {"category": "linear", "symbol": SYMBOL, "interval": INTERVAL, "limit": limit}
     try:
-        r = requests.get(url, params=params, timeout=20).json()
-        raw_data = r["result"]["list"][::-1]
-        df = pd.DataFrame(raw_data, columns=['time','open','high','low','close','volume','turnover'])
+        r = requests.get(url, params=params, timeout=20)
+        raw = r.json()["result"]["list"][::-1]
+        df = pd.DataFrame(raw, columns=['time','open','high','low','close','volume','turnover'])
         for col in ['open','high','low','close','volume']:
             df[col] = df[col].astype(float)
         df['time'] = pd.to_datetime(df['time'].astype(np.int64), unit='ms', utc=True)
         df.set_index('time', inplace=True)
         return df
     except Exception as e:
-        print(f"Error obteniendo velas: {e}")
+        print(f"Error crítico en fetch de datos: {e}")
         return pd.DataFrame()
 
-def inyectar_indicadores_institucionales(df):
-    # 1. EMA 20 (El corazón de la pérdida de impulso)
+def inyectar_analisis_institucional(df):
+    # --- INDICADORES DINÁMICOS ---
+    # EMA 20: La línea de equilibrio del mercado
     df['ema20'] = df['close'].ewm(span=20, adjust=False).mean()
     
-    # 2. ATR para volatilidad
-    high_low = df['high'] - df['low']
-    high_pc = (df['high'] - df['close'].shift()).abs()
-    low_pc = (df['low'] - df['close'].shift()).abs()
-    tr = pd.concat([high_low, high_pc, low_pc], axis=1).max(axis=1)
+    # ATR: Medición de la volatilidad real para SL y TP
+    tr = pd.concat([df['high']-df['low'], 
+                    (df['high']-df['close'].shift()).abs(), 
+                    (df['low']-df['close'].shift()).abs()], axis=1).max(axis=1)
     df['atr'] = tr.rolling(14).mean()
 
-    # 3. RSI para sobrecompra/venta
+    # RSI: Fuerza relativa para detectar clímax
     delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-    df['rsi'] = 100 - (100 / (1 + gain/loss))
+    gain = delta.where(delta > 0, 0).rolling(14).mean()
+    loss = -delta.where(delta < 0, 0).rolling(14).mean()
+    df['rsi'] = 100 - (100 / (1 + (gain/loss)))
 
-    # 4. ANATOMÍA DE VELA (Price Action Puro)
-    df['rango'] = df['high'] - df['low']
-    df['cuerpo'] = (df['close'] - df['open']).abs()
-    # Mechas (Absorción)
-    df['mecha_sup'] = df['high'] - df[['open', 'close']].max(axis=1)
-    df['mecha_inf'] = df[['open', 'close']].min(axis=1) - df['low']
-    # % de mecha respecto al rango total (Vital para detectar muros)
-    df['pct_mecha_sup'] = (df['mecha_sup'] / df['rango'] * 100).fillna(0)
-    df['pct_mecha_inf'] = (df['mecha_inf'] / df['rango'] * 100).fillna(0)
-
-    # 5. ESTADO RESPECTO A EMA (Cruces y Tendencia)
-    df['cierre_bajo_ema'] = df['close'] < df['ema20']
-    df['cierre_sobre_ema'] = df['close'] > df['ema20']
-    # Detectar el momento exacto del cruce
+    # --- ANATOMÍA DE VELAS (ANÁLISIS DE MECHAS DETALLADO) ---
+    df['rango_total'] = df['high'] - df['low']
+    df['cuerpo_absoluto'] = (df['close'] - df['open']).abs()
+    
+    # Cálculo de mechas (Sombras)
+    df['mecha_superior'] = df['high'] - df[['open', 'close']].max(axis=1)
+    df['mecha_inferior'] = df[['open', 'close']].min(axis=1) - df['low']
+    
+    # Porcentajes de absorción (Lo que Gemini vió y antes ignoramos)
+    df['pct_mecha_sup'] = (df['mecha_superior'] / df['rango_total'] * 100).fillna(0)
+    df['pct_mecha_inf'] = (df['mecha_inferior'] / df['rango_total'] * 100).fillna(0)
+    
+    # --- ESTADO DE CRUCE Y MOMENTUM ---
+    df['bajo_ema'] = df['close'] < df['ema20']
     df['cruce_bajista'] = (df['close'] < df['ema20']) & (df['close'].shift(1) > df['ema20'])
     df['cruce_alcista'] = (df['close'] > df['ema20']) & (df['close'].shift(1) < df['ema20'])
     
     return df.dropna()
 
-def analizar_geometria_espacial(df):
-    # Niveles de soporte y resistencia dinámicos
-    resistencia = df['high'].rolling(50).max().iloc[-1]
-    soporte = df['low'].rolling(50).min().iloc[-1]
+def detectar_geometria_espacial(df):
+    # Identificación de techos y suelos (Zonas de Reacción)
+    resistencia_max = df['high'].rolling(60).max().iloc[-1]
+    soporte_min = df['low'].rolling(60).min().iloc[-1]
     
-    # Regresión lineal para ángulo de tendencia
-    y = df['close'].tail(40).values
-    x = np.arange(len(y))
-    slope, intercept, r_value, _, _ = linregress(x, y)
+    # Tendencia por regresión lineal
+    y_vals = df['close'].tail(45).values
+    x_vals = np.arange(len(y_vals))
+    slope, intercept, r_val, p_val, std_err = linregress(x_vals, y_vals)
     angulo = np.degrees(np.arctan(slope))
     
-    # Análisis de "golpes" a la resistencia
-    umbral = df['close'].iloc[-1] * 0.0006
-    toques_res = (df['high'] > (resistencia - umbral)).tail(20).sum()
+    # Conteo de "testeo de zona"
+    margen = df['close'].iloc[-1] * 0.0008
+    golpes_techo = (df['high'] > (resistencia_max - margen)).tail(25).sum()
     
     return {
-        "resistencia": resistencia,
-        "soporte": soporte,
+        "res_macro": resistencia_max,
+        "sup_macro": soporte_min,
         "angulo": angulo,
         "slope": slope,
         "intercept": intercept,
-        "toques_res": toques_res
+        "golpes_res": golpes_techo
     }
 
 # ======================================================
-# EL CEREBRO: PROMPT SIN FILTROS NI SIMPLIFICACIONES
+# 6. IA GROQ: EL CEREBRO DE TOMA DE DECISIONES
 # ======================================================
-def analizar_con_groq_v99(df, geo):
-    vela = df.iloc[-1]
-    # Enviamos un bloque de velas para que la IA vea la "pérdida de impulso"
-    historial = df.tail(8)
+def consultoria_ia_groq_v101(df, geo):
+    # Generamos un historial textual DE LAS ÚLTIMAS 12 VELAS
+    # No solo de una, para que la IA vea la SECUENCIA de absorción.
+    bloque_velas = df.tail(12)
+    historial_detallado = ""
     
-    cuerpo_texto_velas = ""
-    for i, (t, r) in enumerate(historial.iterrows()):
-        pos = "BAJO EMA" if r['close'] < r['ema20'] else "SOBRE EMA"
-        cuerpo_texto_velas += f"T-{7-i}: C={r['close']}, MechaSup={r['pct_mecha_sup']:.1f}%, MechaInf={r['pct_mecha_inf']:.1f}%, {pos}\n"
+    for i, (idx, fila) in enumerate(bloque_velas.iterrows()):
+        color = "🟢 VERDE" if fila['close'] >= fila['open'] else "🔴 ROJA"
+        posicion = "BAJO EMA" if fila['close'] < fila['ema20'] else "SOBRE EMA"
+        historial_detallado += (f"T-{11-i}: {color} | "
+                                f"Mecha Sup: {fila['pct_mecha_sup']:.1f}% | "
+                                f"Mecha Inf: {fila['pct_mecha_inf']:.1f}% | "
+                                f"Cierre: {fila['close']} | {posicion}\n")
 
     prompt = f"""
-INSTRUCCIÓN DE TRADER QUANT SENIOR.
-No falles. Analiza por qué el precio está rechazando zonas.
+AUDITORÍA TÉCNICA DE TRADING - MODELO V101 (PROFESIONAL)
+Tu misión es analizar la estructura y evitar trampas de mercado.
 
-SITUACIÓN ACTUAL:
-- Precio: {vela['close']} | EMA 20: {vela['ema20']:.2f}
-- Resistencia Clave (Línea Morada): {geo['resistencia']:.2f}
-- Soporte Base: {geo['soporte']:.2f}
+CONFIGURACIÓN GEOMÉTRICA:
+- Precio de Mercado: {df['close'].iloc[-1]}
+- Resistencia Crítica (Línea Morada): {geo['res_macro']:.2f}
+- Soporte Base: {geo['sup_macro']:.2f}
 - Ángulo de Tendencia: {geo['angulo']:.2f}°
-- Toques en Resistencia: {geo['toques_res']} (Indica si el precio está 'pegado' al techo).
+- Golpes en Resistencia: {geo['golpes_res']} (Fuerza de testeo).
 
-ESTADO DE CRUCE:
-- ¿Cierre por debajo de EMA 20?: {"SÍ (BAJISTA)" if vela['cierre_bajo_ema'] else "NO"}
-- ¿Cruce bajista reciente?: {"ALERTA: ACABA DE CRUZAR HACIA ABAJO" if vela['cruce_bajista'] else "No"}
+ESTADO DE LA EMA 20 (INSTITUCIONAL):
+- ¿Precio por debajo de EMA 20?: {"SÍ (PÉRDIDA DE MOMENTO)" if df['bajo_ema'].iloc[-1] else "NO"}
+- ¿Cruce bajista en la vela actual?: {"ALERTA: CRUCE BAJISTA CONFIRMADO" if df['cruce_bajista'].iloc[-1] else "NO"}
 
-ANATOMÍA DE LAS ÚLTIMAS 8 VELAS:
-{cuerpo_texto_velas}
+SECUENCIA ANATÓMICA DE LAS ÚLTIMAS 12 VELAS:
+{historial_detallado}
 
-REGLAS INSTITUCIONALES PARA EL VEREDICTO:
-1. Si el precio alcanzó la resistencia ({geo['resistencia']}) y no logró romperla con volumen/fuerza...
-2. Y si el precio ACABA DE CRUZAR o cerrar por debajo de la EMA 20...
-3. Y si ves mechas superiores largas (>40%) en las velas recientes...
-ENTONCES: El impulso alcista ha muerto. Busca un SHORT (Sell). No abras Long (Buy) bajo ninguna circunstancia en esta configuración.
+REGLAS DE EJECUCIÓN (PROHIBIDO IGNORAR):
+1. RECHAZO DE MECHA: Si el precio está cerca de la línea morada ({geo['res_macro']}) y ves una secuencia de mechas superiores largas (>45%), hay absorción de ventas masiva.
+2. CONFIRMACIÓN: No abras Long si el precio acaba de cerrar por debajo de la EMA 20, sin importar lo que diga el RSI.
+3. VEREDICTO GANADOR: Si el precio falla en romper la resistencia y pierde la EMA 20 con velas rojas y mechas superiores, la orden es SELL (Short).
 
-Responde ÚNICAMENTE en formato JSON:
+Responde en este formato JSON exacto:
 {{
   "decision": "Buy" | "Sell" | "Hold",
-  "patron_detectado": "Nombre detallado del patrón de Price Action",
-  "razones": ["Razón 1: Estructura", "Razón 2: EMA/Momentum", "Razón 3: Absorción"],
-  "fuera_de_zona": false
+  "patron_detectado": "Nombre completo del patrón y contexto",
+  "razonamiento_espacial": "Análisis de por qué el precio rechazó o aceptó la zona",
+  "fuera_de_zona": true | false
 }}
 """
     try:
-        resp = client.chat.completions.create(
+        respuesta = client.chat.completions.create(
             model=MODELO_GROQ,
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
             temperature=0.1
         )
-        return json.loads(resp.choices[0].message.content)
+        return json.loads(respuesta.choices[0].message.content)
     except Exception as e:
-        return {"decision": "Hold", "patron_detectado": f"Error: {e}", "razones": []}
+        print(f"Error en comunicación con IA: {e}")
+        return {"decision": "Hold", "razonamiento_espacial": "Error API"}
 
 # ======================================================
-# GRÁFICOS Y LOGS (EL CORAZÓN DEL MONITOREO)
+# 7. GENERACIÓN DE GRÁFICOS (EVIDENCIA VISUAL)
 # ======================================================
-def generar_grafico_detallado(df, geo, res_ia, decision):
-    df_p = df.tail(100)
-    fig, ax = plt.subplots(figsize=(16, 9))
-    x = np.arange(len(df_p))
+def generar_visualizacion_v101(df, geo, res_ia):
+    df_plot = df.tail(110)
+    fig, ax = plt.subplots(figsize=(15, 9))
+    x_axis = np.arange(len(df_plot))
     
-    # Velas Japonesas
-    for i in range(len(df_p)):
-        c = 'lime' if df_p['close'].iloc[i] >= df_p['open'].iloc[i] else 'red'
-        ax.vlines(x[i], df_p['low'].iloc[i], df_p['high'].iloc[i], color=c, linewidth=1)
-        ax.add_patch(plt.Rectangle((x[i]-0.3, min(df_p['open'].iloc[i], df_p['close'].iloc[i])), 0.6, abs(df_p['open'].iloc[i]-df_p['close'].iloc[i]), color=c))
+    # Dibujo de Velas Manual (Alta Fidelidad)
+    for i in range(len(df_plot)):
+        color = 'lime' if df_plot['close'].iloc[i] >= df_plot['open'].iloc[i] else 'red'
+        # Mechas
+        ax.vlines(x_axis[i], df_plot['low'].iloc[i], df_plot['high'].iloc[i], color=color, linewidth=1.2)
+        # Cuerpo
+        base = min(df_plot['open'].iloc[i], df_plot['close'].iloc[i])
+        altura = max(abs(df_plot['close'].iloc[i] - df_plot['open'].iloc[i]), 0.1)
+        ax.add_patch(plt.Rectangle((x_axis[i]-0.3, base), 0.6, altura, color=color, alpha=0.85))
 
-    # Líneas de Estrategia
-    ax.axhline(geo['resistencia'], color='purple', linewidth=2, linestyle='--', label='Resistencia Morada')
-    ax.axhline(geo['soporte'], color='blue', linewidth=2, linestyle='--', label='Soporte Base')
-    ax.plot(x, df_p['ema20'].values, color='yellow', linewidth=2, label='EMA 20')
+    # Líneas Técnicas
+    ax.axhline(geo['res_macro'], color='purple', linewidth=2.5, linestyle='--', label='Línea Morada (RES)')
+    ax.axhline(geo['sup_macro'], color='cyan', linewidth=2, linestyle='--', label='Soporte Macro')
+    ax.plot(x_axis, df_plot['ema20'].values, color='yellow', linewidth=2.5, label='EMA 20')
     
-    # Etiquetado de decisión
-    razones_txt = "\n".join([textwrap.fill(r, 60) for r in res_ia.get('razones', [])])
-    info_box = f"DECISIÓN: {decision.upper()}\nPATRÓN: {res_ia.get('patron_detectado')}\n\n{razones_txt}"
-    ax.text(0.02, 0.95, info_box, transform=ax.transAxes, color='white', verticalalignment='top', bbox=dict(facecolor='black', alpha=0.8, edgecolor='purple'))
+    # Anotación de la IA
+    txt_ia = (f"DECISIÓN: {res_ia['decision'].upper()}\n"
+              f"PATRÓN: {res_ia.get('patron_detectado')}\n"
+              f"RAZÓN: {textwrap.fill(res_ia.get('razonamiento_espacial', ''), 65)}")
+    
+    ax.text(0.02, 0.98, txt_ia, transform=ax.transAxes, color='white', verticalalignment='top', 
+            bbox=dict(facecolor='black', edgecolor='purple', alpha=0.9, boxstyle='round,pad=1'))
 
-    ax.set_facecolor('#0d1117'); fig.patch.set_facecolor('#0d1117')
+    ax.set_title(f"BOT MAESTRO V101 - BTC/USDT - PRECISIÓN INSTITUCIONAL", color='white', fontsize=14)
+    ax.set_facecolor('#0a0a0a'); fig.patch.set_facecolor('#0a0a0a')
     ax.tick_params(colors='white'); ax.grid(alpha=0.1)
-    plt.legend()
+    plt.legend(loc='lower right', facecolor='black', labelcolor='white')
+    
     return fig
 
 # ======================================================
-# GESTIÓN DE POSICIONES (SIMULACIÓN REALISTA)
+# 8. GESTIÓN DE RIESGO Y ÓRDENES (LÓGICA DE EJECUCIÓN)
 # ======================================================
-def gestionar_posicion(df):
-    global PAPER_POSICION_ACTIVA, PAPER_BALANCE, PAPER_TP1_HECHO, PAPER_TRADES_TOTALES, PAPER_WIN, PAPER_LOSS
+def monitorear_posicion_activa(df):
+    global PAPER_POSICION_ACTIVA, PAPER_BALANCE, PAPER_TP1_LISTO, PAPER_TRADES_TOTALES, PAPER_WIN, PAPER_LOSS, PAPER_LAST_10_PNL
+    
     if PAPER_POSICION_ACTIVA is None: return
 
-    vela = df.iloc[-1]
-    precio_actual = vela['close']
-    pnl_final = 0
-    cerro = False
+    vela_actual = df.iloc[-1]
+    cierre_requerido = False
+    pnl_realizado = 0
 
     if PAPER_POSICION_ACTIVA == "Buy":
-        if not PAPER_TP1_HECHO and vela['high'] >= PAPER_TP1:
-            PAPER_BALANCE += (PAPER_TP1 - PAPER_PRECIO_ENTRADA) * (PAPER_SIZE_BTC * 0.5)
-            PAPER_TP1_HECHO = True
-            enviar_telegram_texto("🎯 TP1 ALCANZADO (Long). Cerrado 50%.")
-        if vela['low'] <= PAPER_SL:
-            pnl_final = (PAPER_SL - PAPER_PRECIO_ENTRADA) * (PAPER_SIZE_BTC * (0.5 if PAPER_TP1_HECHO else 1.0))
-            cerro = True
+        # Gestión de TP1 Parcial
+        if not PAPER_TP1_LISTO and vela_actual['high'] >= PAPER_TP1:
+            PAPER_BALANCE += (PAPER_TP1 - PAPER_PRECIO_ENTRADA) * (PAPER_SIZE_BTC * PORCENTAJE_CIERRE_PARCIAL)
+            PAPER_TP1_LISTO = True
+            PAPER_SL = PAPER_PRECIO_ENTRADA # Mover a Break Even
+            telegram_enviar_texto("🎯 TP1 ALCANZADO (LONG). 50% cerrado. SL a Break Even.")
+        
+        # Gestión de Cierre Total (SL o Trailing)
+        if vela_actual['low'] <= PAPER_SL:
+            pnl_realizado = (PAPER_SL - PAPER_PRECIO_ENTRADA) * (PAPER_SIZE_BTC * (0.5 if PAPER_TP1_LISTO else 1.0))
+            cierre_requerido = True
+            
     elif PAPER_POSICION_ACTIVA == "Sell":
-        if not PAPER_TP1_HECHO and vela['low'] <= PAPER_TP1:
-            PAPER_BALANCE += (PAPER_PRECIO_ENTRADA - PAPER_TP1) * (PAPER_SIZE_BTC * 0.5)
-            PAPER_TP1_HECHO = True
-            enviar_telegram_texto("🎯 TP1 ALCANZADO (Short). Cerrado 50%.")
-        if vela['high'] >= PAPER_SL:
-            pnl_final = (PAPER_PRECIO_ENTRADA - PAPER_SL) * (PAPER_SIZE_BTC * (0.5 if PAPER_TP1_HECHO else 1.0))
-            cerro = True
+        # Gestión de TP1 Parcial
+        if not PAPER_TP1_LISTO and vela_actual['low'] <= PAPER_TP1:
+            PAPER_BALANCE += (PAPER_PRECIO_ENTRADA - PAPER_TP1) * (PAPER_SIZE_BTC * PORCENTAJE_CIERRE_PARCIAL)
+            PAPER_TP1_LISTO = True
+            PAPER_SL = PAPER_PRECIO_ENTRADA
+            telegram_enviar_texto("🎯 TP1 ALCANZADO (SHORT). 50% cerrado. SL a Break Even.")
+            
+        if vela_actual['high'] >= PAPER_SL:
+            pnl_realizado = (PAPER_PRECIO_ENTRADA - PAPER_SL) * (PAPER_SIZE_BTC * (0.5 if PAPER_TP1_LISTO else 1.0))
+            cierre_requerido = True
 
-    if cerro:
-        PAPER_BALANCE += pnl_final
+    if cierre_requerido:
+        PAPER_BALANCE += pnl_realizado
         PAPER_TRADES_TOTALES += 1
-        if pnl_final > 0: PAPER_WIN += 1
+        if pnl_realizado > 0: PAPER_WIN += 1
         else: PAPER_LOSS += 1
-        PAPER_LAST_10_PNL.append(pnl_final)
-        enviar_telegram_texto(f"📤 POSICIÓN CERRADA. PnL: {pnl_final:.2f} USD. Balance: {PAPER_BALANCE:.2f}")
+        PAPER_LAST_10_PNL.append(pnl_realizado)
+        
+        telegram_enviar_texto(f"📤 POSICIÓN CERRADA\n💵 PnL: {pnl_realizado:.2f} USD\n💰 Balance Actual: {PAPER_BALANCE:.2f}")
         PAPER_POSICION_ACTIVA = None
 
 # ======================================================
-# BUCLE PRINCIPAL (DETALLADO)
+# 9. BUCLE MAESTRO DE EJECUCIÓN (HEARTBEAT)
 # ======================================================
-def ejecutar_bot():
-    print("🚀 BOT V99.0 ACTIVADO - ESCANEO DE PRECISIÓN")
-    enviar_telegram_texto("🚀 BOT V99.0: Modo Anti-Alucinación y Acción de Precio activado.")
-    ultima_vela_t = None
+def ejecutar_bot_maestro():
+    print("🔥 BOT V101 ACTIVADO - PROTOCOLO DE MÁXIMA EXTENSIÓN")
+    telegram_enviar_texto("🚀 *BOT V101 INICIADO*\nModo de Análisis Secuencial de Mechas y Acción de Precio Total.")
+    
+    ultima_vela_procesada = None
 
     while True:
         try:
-            df = inyectar_indicadores_institucionales(obtener_datos_mercado())
-            if df.empty: continue
+            # Captura de datos
+            df_raw = fetch_mercado_data()
+            if df_raw.empty: continue
             
-            geo = analizar_geometria_espacial(df)
-            pnl_10 = sum(PAPER_LAST_10_PNL[-10:]) if PAPER_LAST_10_PNL else 0.0
+            df = inyectar_analisis_institucional(df_raw)
+            geo = detectar_geometria_espacial(df)
             
-            # LOG DE HEARTBEAT (Lo que pediste)
-            print(f"\n💎 [{datetime.now().strftime('%H:%M:%S')}] PnL 10: {pnl_10:.2f} | Trades: {PAPER_TRADES_TOTALES}")
-            print(f"   Precio: {df['close'].iloc[-1]} | EMA20: {df['ema20'].iloc[-1]:.2f} | Ángulo: {geo['angulo']:.1f}°")
-            print(f"   Tendencia: {'BULLISH' if geo['angulo'] > 0 else 'BEARISH'} | RSI: {df['rsi'].iloc[-1]:.1f}")
+            # --- LOG DE AUDITORÍA (HEARTBEAT) ---
+            pnl_global_10 = sum(PAPER_LAST_10_PNL[-10:]) if PAPER_LAST_10_PNL else 0.0
+            print(f"\n💓 [{datetime.now().strftime('%H:%M:%S')}] HEARTBEAT")
+            print(f"   Precio: {df['close'].iloc[-1]} | EMA20: {df['ema20'].iloc[-1]:.2f} | RSI: {df['rsi'].iloc[-1]:.1f}")
+            print(f"   Ángulo: {geo['angulo']:.2f}° | PnL 10 trades: {pnl_global_10:.2f} | Contador: {PAPER_TRADES_TOTALES}")
+            print(f"   Niveles: RES {geo['res_macro']:.2f} | SUP {geo['sup_macro']:.2f}")
 
-            # Solo analizar al cerrar una vela
-            if PAPER_POSICION_ACTIVA is None and ultima_vela_t != df.index[-2]:
-                print("🔍 Consultando al experto Groq...")
-                res = analizar_con_groq_v99(df, geo)
-                decision = res.get("decision", "Hold")
+            # Análisis de entrada (Solo al cierre de vela)
+            if PAPER_POSICION_ACTIVA is None and ultima_vela_procesada != df.index[-2]:
+                print("🔍 Consultando al experto de IA Groq...")
+                resultado_ia = consultoria_ia_groq_v101(df, geo)
                 
-                if decision in ["Buy", "Sell"]:
-                    # Lógica de apertura
-                    global PAPER_POSICION_ACTIVA, PAPER_PRECIO_ENTRADA, PAPER_SL, PAPER_TP1, PAPER_SIZE_BTC, PAPER_TP1_HECHO
-                    precio = df['close'].iloc[-1]
-                    atr = df['atr'].iloc[-1]
+                decision = resultado_ia.get("decision", "Hold")
+                if decision in ["Buy", "Sell"] and not resultado_ia.get("fuera_de_zona", False):
+                    # Abrir posición
+                    global PAPER_POSICION_ACTIVA, PAPER_PRECIO_ENTRADA, PAPER_SL, PAPER_TP1, PAPER_SIZE_BTC, PAPER_TP1_LISTO
+                    precio_in = df['close'].iloc[-1]
+                    atr_in = df['atr'].iloc[-1]
                     
+                    dist_stop = atr_in * MULT_SL
                     PAPER_POSICION_ACTIVA = decision
-                    PAPER_PRECIO_ENTRADA = precio
-                    PAPER_TP1_HECHO = False
+                    PAPER_PRECIO_ENTRADA = precio_in
+                    PAPER_TP1_LISTO = False
                     
-                    dist_atr = atr * MULT_SL
                     if decision == "Buy":
-                        PAPER_SL = precio - dist_atr
-                        PAPER_TP1 = precio + (atr * MULT_TP1)
+                        PAPER_SL = precio_in - dist_stop
+                        PAPER_TP1 = precio_in + (atr_in * MULT_TP1)
                     else:
-                        PAPER_SL = precio + dist_atr
-                        PAPER_TP1 = precio - (atr * MULT_TP1)
-                        
-                    PAPER_SIZE_BTC = (PAPER_BALANCE * RISK_PER_TRADE) / dist_atr
+                        PAPER_SL = precio_in + dist_stop
+                        PAPER_TP1 = precio_in - (atr_in * MULT_TP1)
                     
-                    enviar_telegram_texto(f"🔔 ENTRADA {decision.upper()}\nPatrón: {res['patron_detectado']}\nPrecio: {precio}")
-                    fig = generar_grafico_detallado(df, geo, res, decision)
-                    enviar_telegram_foto(fig)
-                    plt.close(fig)
-                    ultima_vela_t = df.index[-2]
+                    # Cálculo de tamaño basado en riesgo
+                    PAPER_SIZE_BTC = (PAPER_BALANCE * RISK_PER_TRADE) / dist_stop
+                    
+                    telegram_enviar_texto(f"🔔 *ORDEN {decision.upper()} EJECUTADA*\n📍 Patrón: {resultado_ia.get('patron_detectado')}")
+                    figura = generar_visualizacion_v101(df, geo, resultado_ia)
+                    telegram_enviar_grafico(figura)
+                    plt.close(figura)
+                    
+                    ultima_vela_procesada = df.index[-2]
                 
-                elif res.get("fuera_de_zona"):
-                    print("⚠️ Patrón detectado pero fuera de zona operativa.")
+                elif resultado_ia.get("fuera_de_zona"):
+                    print(f"⚠️ Patrón {resultado_ia.get('patron_detectado')} fuera de zona operativa.")
 
-            gestionar_posicion(df)
+            # Gestión continua
+            monitorear_posicion_activa(df)
+            
             time.sleep(SLEEP_SECONDS)
 
         except Exception as e:
-            print(f"🚨 Error crítico: {e}"); time.sleep(30)
+            print(f"🚨 ERROR CRÍTICO: {e}")
+            time.sleep(40)
 
 if __name__ == "__main__":
-    ejecutar_bot()
+    ejecutar_bot_maestro()

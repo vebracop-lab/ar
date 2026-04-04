@@ -354,6 +354,8 @@ def evaluar_impacto_zonas(df, idx=-2, ventana_macro=120):
         "slope": slope,
         "intercept": intercept
     }
+    
+    return en_zona_compra, en_zona_venta, log_zonas
 
 # ======================================================
 # GRÁFICOS Y UTILIDADES DE IMAGEN
@@ -558,7 +560,7 @@ def log_colab(df, tendencia, slope, soporte, resistencia, decision, razones, log
         print(f"🧠 {razon}")
     print("="*100)
 
-    # ======================================================
+# ======================================================
 # MOTOR FINANCIERO Y GESTIÓN
 # ======================================================
 def paper_abrir_posicion(decision, precio, atr, razones, tiempo):
@@ -763,7 +765,7 @@ def risk_management_check():
         return False
     return True
 
-    # ======================================================
+# ======================================================
 # SISTEMA SECUNDARIO INSTITUCIONAL (PARALELO)
 # ======================================================
 class InstitutionalStats:
@@ -949,4 +951,3 @@ def run_bot():
 
 if __name__ == '__main__':
     run_bot()
-    return en_zona_compra, en_zona_venta, log_zonas

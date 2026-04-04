@@ -1,14 +1,12 @@
-# BOT TRADING V100.0 BYBIT REAL – PRODUCCIÓN (VISION AI) 
+# BOT TRADING V101.0 BYBIT REAL – PRODUCCIÓN (SIN PROXY) 
 # ======================================================
 # ⚠️ KEYS INCLUIDAS TAL CUAL (SEGÚN PEDIDO)
 # Diseñado para FUTUROS PERPETUOS BTCUSDT en Bybit
 # ======================================================
-# NOVEDADES V100.0 (GROQ VISION AI MASTERMIND):
-# - ELIMINADOS todos los patrones rígidos de velas japonesas.
-# - INTELIGENCIA MULTIMODAL: El bot toma una foto del gráfico en las zonas
-#   clave y se la envía a la IA de Groq (Llama 3.2 Vision). La IA analiza 
-#   visualmente el Price Action y toma la decisión final de operar.
-# - Zonas Dinámicas: S/R, EMA 20, Canales de Regresión, Principio Polaridad.
+# NOVEDADES V101.0 (HOLISTIC AI MASTERMIND):
+# - CEREBRO HOLÍSTICO: La IA ya no busca solo reversiones; analiza TODO el contexto
+#   (Rupturas, continuaciones de tendencia, rechazos en la EMA, fuerza del canal).
+# - FIX MODELO GROQ: Actualizado a llama-3.2-90b-vision-preview (El modelo activo).
 # - CÓDIGO 100% EXPANDIDO. CERO COMPRESIÓN.
 # ======================================================
 
@@ -46,11 +44,10 @@ def cerca_de_nivel(precio, nivel, margen):
 
 SYMBOL = "BTCUSDT"
 INTERVAL = "5"  
-RISK_PER_TRADE = 0.02  # Riesgo del 2%
-LEVERAGE = 10          # Apalancamiento 10x
+RISK_PER_TRADE = 0.02  
+LEVERAGE = 10          
 SLEEP_SECONDS = 60     
 
-# MULTIPLICADORES DE RIESGO/BENEFICIO 
 MULT_SL = 1.5          
 MULT_TP1 = 2.5         
 MULT_TRAILING_BASE = 2.0    
@@ -113,7 +110,10 @@ def telegram_mensaje(texto):
         return
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": texto}
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID, 
+            "text": texto
+        }
         requests.post(url, data=payload, timeout=10)
     except Exception:
         pass
@@ -153,6 +153,7 @@ def obtener_velas(limit=300):
         "limit": limit
     }
     r = requests.get(url, params=params, timeout=20)
+    
     if not r.text: 
         raise Exception("Respuesta vacía de Bybit")
     try:
@@ -180,6 +181,7 @@ def obtener_velas(limit=300):
     
     df['time'] = pd.to_datetime(df['time'].astype(np.int64), unit='ms', utc=True)
     df.set_index('time', inplace=True)
+    
     return df
 
 # ======================================================
@@ -208,7 +210,11 @@ def calcular_indicadores(df):
 
     return df.dropna()
 
-def detectar_zonas_mercado(df, idx=-2, ventana_macro=120):
+def evaluar_impacto_zonas(df, idx=-2, ventana_macro=120):
+    """
+    Evalúa si el precio se encuentra en una zona crítica donde vale la pena despertar a la IA.
+    Calcula Soportes, Canales y Tendencia simultáneamente para evitar variables huérfanas.
+    """
     df_eval = df.iloc[:idx+1]
     
     soporte_horiz = df_eval['low'].rolling(40).min().iloc[-1]
@@ -252,12 +258,7 @@ def detectar_zonas_mercado(df, idx=-2, ventana_macro=120):
     canal_sup = linea_central[-1] + (desviacion * 1.5)
     canal_inf = linea_central[-1] - (desviacion * 1.5)
     
-    return soporte_horiz, resistencia_horiz, canal_sup, canal_inf, slope, intercept, tendencia_macro, max_previo, min_previo
-
-def evaluar_impacto_zonas(df, soporte_horiz, resistencia_horiz, canal_sup, canal_inf, tendencia_macro, max_previo, min_previo, idx=-2):
-    """
-    Evalúa si el precio se encuentra en una zona crítica donde vale la pena despertar a la IA de Groq.
-    """
+    # Análisis espacial del impacto del precio
     atr_actual = df['atr'].iloc[idx]
     ema20_actual = df['ema20'].iloc[idx]
     precio_cierre = df['close'].iloc[idx]
@@ -322,7 +323,6 @@ def evaluar_impacto_zonas(df, soporte_horiz, resistencia_horiz, canal_sup, canal
     en_zona_compra = toca_sop_horiz or toca_sop_dinamico or rechazo_alcista_ema or toca_polaridad_sop
     en_zona_venta = toca_res_horiz or toca_res_dinamica or rechazo_bajista_ema or toca_polaridad_res
 
-    # 🚫 Filtros espaciales
     if rechazo_bajista_ema: en_zona_compra = False
     if rechazo_alcista_ema: en_zona_venta = False
 
@@ -351,7 +351,11 @@ def evaluar_impacto_zonas(df, soporte_horiz, resistencia_horiz, canal_sup, canal
         "zonas_compra": ", ".join(zonas_compra) if zonas_compra else "Ninguna",
         "zonas_venta": ", ".join(zonas_venta) if zonas_venta else "Ninguna",
         "posicion_rango": posicion_en_rango,
-        "tendencia_macro": tendencia_macro
+        "tendencia_macro": tendencia_macro,
+        "slope": slope,
+        "intercept": intercept,
+        "soporte": soporte_horiz,
+        "resistencia": resistencia_horiz
     }
     
     return en_zona_compra, en_zona_venta, log_zonas
@@ -404,7 +408,6 @@ def generar_grafico_entrada(df, decision, soporte, resistencia, slope, intercept
 
         entrada_x_idx = len(df_plot) - 2
         
-        # Si la decisión es ANALISIS, generamos un gráfico neutral sin marcadores de entrada para que la IA lo lea sin sesgos.
         if decision == 'Buy':
             ax.scatter(entrada_x_idx, closes[-2], s=200, marker='^', color='lime', edgecolors='black', zorder=5)
             ax.axvline(entrada_x_idx, color='lime', linestyle=':', linewidth=2)
@@ -416,7 +419,7 @@ def generar_grafico_entrada(df, decision, soporte, resistencia, slope, intercept
         texto_panel = f"OPERACION: {decision.upper()}\nPrecio: {df['close'].iloc[-1]:.2f}\nRSI Contexto: {df['rsi'].iloc[-2]:.1f}\n\nInfo:\n{texto_razones}"
         ax.text(0.02, 0.98, texto_panel, transform=ax.transAxes, fontsize=11, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.85))
 
-        ax.set_title(f"BOT V100.0 - VISION AI - Análisis {decision.upper()} (5m)")
+        ax.set_title(f"BOT V101.0 - VISION AI - Análisis {decision.upper()} (5m)")
         ax.grid(True, alpha=0.2)
         plt.legend(loc="lower right")
         plt.tight_layout()
@@ -461,10 +464,10 @@ def generar_grafico_salida(df, trade_data):
             
         ax.scatter([indice_salida_x],[salida_price], s=200, c=color_marcador, marker=forma, edgecolors='black', zorder=5)
 
-        texto_panel = f"CIERRE {decision_original}\nMotivo: {trade_data['motivo']}\nPnL: {pnl_obtenido:.4f} USD\nBalance: {trade_data['balance']:.2f} USD"
-        ax.text(0.02, 0.95, texto_panel, transform=ax.transAxes, fontsize=12, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
+        texto_panel_salida = f"CIERRE {decision_original}\nMotivo: {trade_data['motivo']}\nPnL: {pnl_obtenido:.4f} USD\nBalance: {trade_data['balance']:.2f} USD"
+        ax.text(0.02, 0.95, texto_panel_salida, transform=ax.transAxes, fontsize=12, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
 
-        ax.set_title("BOT V100.0 - DETALLE DE CIERRE")
+        ax.set_title("BOT V101.0 - DETALLE DE CIERRE")
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
         return fig
@@ -472,12 +475,12 @@ def generar_grafico_salida(df, trade_data):
         return None
 
 # ======================================================
-# 🧠 CEREBRO GROQ VISION AI (EL NUEVO DETECTOR MAESTRO)
+# 🧠 CEREBRO GROQ VISION AI (HOLÍSTICO Llama 3.2 90B)
 # ======================================================
 def analizar_con_groq(df, idx, log_zonas, base64_image):
     """
-    Envia el gráfico neutral y los datos del mercado a Groq LLaVA Vision.
-    La IA devuelve un JSON con su decisión.
+    Envia el gráfico neutral y los datos del mercado a Groq (llama-3.2-90b-vision-preview).
+    La IA devuelve un JSON con su decisión basada en el análisis HOLÍSTICO.
     """
     if not client_groq:
         return "WAIT", "No se configuró GROQ_API_KEY."
@@ -489,30 +492,33 @@ def analizar_con_groq(df, idx, log_zonas, base64_image):
     zonas_v = log_zonas.get('zonas_venta', 'Ninguna')
 
     prompt = f"""
-    Eres el mejor Trader Cuantitativo Institucional de Criptomonedas del mundo.
+    Eres el mejor Trader Institucional de Criptomonedas del mundo.
     A continuación tienes un gráfico de velas de 5 minutos de BTCUSDT y sus datos técnicos actuales:
 
-    - Precio Evaluado: {precio_actual:.2f}
-    - RSI (Agotamiento): {rsi_actual:.1f}
-    - Tendencia Macro (Canal Blanco): {tendencia}
-    - El precio acaba de tocar las siguientes zonas de COMPRA (Soporte): {zonas_c}
-    - El precio acaba de tocar las siguientes zonas de VENTA (Resistencia): {zonas_v}
+    - Precio Actual: {precio_actual:.2f}
+    - RSI Actual: {rsi_actual:.1f}
+    - Tendencia Macro: {tendencia}
+    - Zonas Activas de Soporte (Piso): {zonas_c}
+    - Zonas Activas de Resistencia (Techo): {zonas_v}
 
-    Tu tarea: Mirar la imagen del gráfico adjunto y analizar estrictamente la ACCIÓN DEL PRECIO en las últimas velas que están tocando las zonas. 
-    ¿Hay un patrón de reversión evidente? (Ej. Mechas largas de rechazo, velas envolventes fuertes que rechazan la zona, agotamiento extremo).
+    Tu tarea: Analizar TODO el contexto del gráfico de forma holística. 
+    1. Observa la tendencia general (canal de regresión rojo/verde, línea blanca central).
+    2. Observa la EMA 20 (línea amarilla). ¿Está actuando como soporte, resistencia o el precio la cruza sin respeto?
+    3. Observa las zonas horizontales (líneas cyan y magenta). ¿Estamos en el techo o en el suelo de la estructura?
+    4. Analiza la acción del precio: No busques solo patrones de reversión. Evalúa si hay fuerza de ruptura (breakout), consolidación para continuar a favor de la tendencia, rechazos contundentes en las zonas críticas o agotamiento inminente.
 
-    Reglas de Decisión:
-    - Si el precio está en una zona de COMPRA y la imagen muestra un rechazo claro alcista -> Responde BUY
-    - Si el precio está en una zona de VENTA y la imagen muestra un rechazo claro bajista -> Responde SELL
-    - Si el mercado no muestra fuerza, la vela es indecisa, o el patrón rompió la zona en tu contra -> Responde WAIT
+    Basado en todo el ecosistema visual y numérico, ¿cuál es el movimiento de mayor probabilidad en los próximos minutos?
+    - Responde BUY si el contexto general indica un rebote alcista sólido en soporte, un rompimiento alcista con fuerza o la continuación de una tendencia de subida saludable.
+    - Responde SELL si el contexto general indica un rechazo bajista contundente en resistencia, una ruptura a la baja, o la continuación de una caída con volumen.
+    - Responde WAIT si hay indecisión, el mercado está en medio de la nada ("tierra de nadie") o hay señales altamente contradictorias.
 
-    DEBES responder ÚNICAMENTE con un JSON válido, sin texto adicional antes ni después, usando esta estructura exacta:
-    {{"decision": "BUY", "razon": "El precio tocó el soporte horizontal y formó una vela de rechazo alcista con fuerte intención."}}
+    DEBES responder ÚNICAMENTE con un JSON válido, sin ningún texto adicional antes ni después, usando esta estructura exacta:
+    {{"decision": "BUY", "razon": "Explicación detallada del contexto, la tendencia, la EMA, el comportamiento de las velas y por qué se toma la decisión de comprar en este punto exacto."}}
     """
 
     try:
         response = client_groq.chat.completions.create(
-            model="llama-3.2-11b-vision-preview",
+            model="llama-3.2-90b-vision-preview",
             messages=[
                 {
                     "role": "user",
@@ -523,12 +529,11 @@ def analizar_con_groq(df, idx, log_zonas, base64_image):
                 }
             ],
             temperature=0.1,
-            max_tokens=200
+            max_tokens=250
         )
         
         respuesta_texto = response.choices[0].message.content.strip()
         
-        # Parseamos el JSON extraído de la respuesta (Por si la IA agregó markdown)
         match = re.search(r'\{.*\}', respuesta_texto, re.DOTALL)
         if match:
             datos_json = json.loads(match.group())
@@ -536,15 +541,15 @@ def analizar_con_groq(df, idx, log_zonas, base64_image):
             razon = datos_json.get("razon", "IA tomó una decisión sin justificación.")
             return decision, razon
         else:
-            return "WAIT", f"La IA no devolvió un JSON estructurado. Respuesta: {respuesta_texto}"
+            return "WAIT", f"La IA no devolvió un JSON estructurado. Respuesta cruda: {respuesta_texto}"
 
     except Exception as e:
-        return "WAIT", f"Error de comunicación con Groq Vision: {e}"
+        return "WAIT", f"Error de conexión o fallo de modelo en Groq: {e}"
 
-def log_colab(df, tendencia, slope, soporte, resistencia, decision, razones, log_zonas, idx=-2):
+def log_colab(df, log_zonas, decision, razones, idx=-2):
     ahora = datetime.now(timezone.utc)
     print("="*100)
-    print(f"🕒 {ahora} | 💰 Precio Cerrado Evaluado: {df['close'].iloc[idx]:.2f}")
+    print(f"🕒 {ahora} | 💰 Precio Analizado: {df['close'].iloc[idx]:.2f}")
     if log_zonas:
         pos_rango = log_zonas.get('posicion_rango', 0)
         print(f"🏢 Posición en el Rango: {pos_rango*100:.1f}% (0%=Suelo, 100%=Techo)")
@@ -556,7 +561,7 @@ def log_colab(df, tendencia, slope, soporte, resistencia, decision, razones, log
         print(f"🎯 DECISIÓN IA: MANTENER AL MARGEN (NO TRADE)")
         
     for razon in razones: 
-        print(f"🧠 Lógica: {razon}")
+        print(f"🧠 {razon}")
     print("="*100)
 
 # ======================================================
@@ -564,19 +569,33 @@ def log_colab(df, tendencia, slope, soporte, resistencia, decision, razones, log
 # ======================================================
 def paper_abrir_posicion(decision, precio, atr, razones, tiempo):
     global PAPER_POSICION_ACTIVA, PAPER_PRECIO_ENTRADA, PAPER_SL, PAPER_TP1, PAPER_SIZE_USD, PAPER_SIZE_BTC, PAPER_SIZE_BTC_RESTANTE, PAPER_DECISION_ACTIVA, PAPER_PARTIAL_ACTIVADO, PAPER_TP1_EJECUTADO, PAPER_PNL_PARCIAL
-    if PAPER_POSICION_ACTIVA is not None: return False
+    
+    if PAPER_POSICION_ACTIVA is not None: 
+        return False
 
     riesgo_usd = PAPER_BALANCE * RISK_PER_TRADE
-    sl = precio - (atr * MULT_SL) if decision == "Buy" else precio + (atr * MULT_SL)
-    tp1 = precio + (atr * MULT_TP1) if decision == "Buy" else precio - (atr * MULT_TP1)
+    
+    if decision == "Buy":
+        sl = precio - (atr * MULT_SL)
+        tp1 = precio + (atr * MULT_TP1)
+    elif decision == "Sell":
+        sl = precio + (atr * MULT_SL)
+        tp1 = precio - (atr * MULT_TP1)
+    else:
+        return False
     
     distancia_riesgo = abs(precio - sl)
-    if distancia_riesgo == 0: return False
+    if distancia_riesgo == 0: 
+        return False
 
     size_en_dolares_ideal = (riesgo_usd / distancia_riesgo) * precio
     poder_maximo = PAPER_BALANCE * LEVERAGE
-    size_real = poder_maximo if size_en_dolares_ideal > poder_maximo else size_en_dolares_ideal
     
+    if size_en_dolares_ideal > poder_maximo:
+        size_real = poder_maximo
+    else:
+        size_real = size_en_dolares_ideal
+        
     PAPER_POSICION_ACTIVA = decision
     PAPER_DECISION_ACTIVA = decision
     PAPER_PRECIO_ENTRADA = precio
@@ -594,10 +613,16 @@ def paper_abrir_posicion(decision, precio, atr, razones, tiempo):
 def paper_revisar_sl_tp(df):
     global PAPER_SL, PAPER_TP1, PAPER_PRECIO_ENTRADA, PAPER_DECISION_ACTIVA, PAPER_POSICION_ACTIVA, PAPER_BALANCE, PAPER_PNL_GLOBAL, PAPER_TRADES_TOTALES, PAPER_ULTIMO_RESULTADO, PAPER_ULTIMO_PNL, PAPER_SIZE_BTC, PAPER_SIZE_BTC_RESTANTE, PAPER_TP1_EJECUTADO, PAPER_WIN, PAPER_LOSS, PAPER_PNL_PARCIAL
 
-    if PAPER_POSICION_ACTIVA is None: return None
+    if PAPER_POSICION_ACTIVA is None: 
+        return None
 
-    high, low, close, atr_actual = df['high'].iloc[-1], df['low'].iloc[-1], df['close'].iloc[-1], df['atr'].iloc[-1]
-    cerrar_total, motivo = False, None
+    high = df['high'].iloc[-1]
+    low = df['low'].iloc[-1]
+    close = df['close'].iloc[-1]
+    atr_actual = df['atr'].iloc[-1]
+    
+    cerrar_total = False
+    motivo = None
 
     if PAPER_POSICION_ACTIVA == "Buy":
         if PAPER_TP1_EJECUTADO == False:
@@ -608,20 +633,30 @@ def paper_revisar_sl_tp(df):
                 PAPER_SIZE_BTC_RESTANTE = PAPER_SIZE_BTC * (1 - PORCENTAJE_CIERRE)
                 PAPER_TP1_EJECUTADO = True
                 PAPER_SL = PAPER_PRECIO_ENTRADA 
-                telegram_mensaje(f"🎯 TP1 ALCANZADO (+{PAPER_PNL_PARCIAL:.2f} USD). SL a Break Even. Iniciando Trailing...")
+                telegram_mensaje(f"🎯 TP1 ALCANZADO (+{PAPER_PNL_PARCIAL:.2f} USD). SL a Break Even. Iniciando Trailing Acelerado...")
 
         if PAPER_TP1_EJECUTADO == True:
-            distancia = close - PAPER_PRECIO_ENTRADA
-            atrs_ganados = distancia / atr_actual
-            if atrs_ganados >= 5.0: mult_din = 0.8  
-            elif atrs_ganados >= 3.0: mult_din = 1.2  
-            else: mult_din = MULT_TRAILING_BASE
+            distancia_a_favor = close - PAPER_PRECIO_ENTRADA
+            atrs_ganados = distancia_a_favor / atr_actual
             
-            nuevo_sl = close - (atr_actual * mult_din)
-            if nuevo_sl > PAPER_SL: PAPER_SL = nuevo_sl 
+            if atrs_ganados >= 5.0:
+                multiplicador_dinamico = 0.8  
+            elif atrs_ganados >= 3.0:
+                multiplicador_dinamico = 1.2  
+            else:
+                multiplicador_dinamico = MULT_TRAILING_BASE
+                
+            nuevo_sl = close - (atr_actual * multiplicador_dinamico)
+            
+            if nuevo_sl > PAPER_SL: 
+                PAPER_SL = nuevo_sl 
 
         if low <= PAPER_SL:
-            cerrar_total, motivo = True, "Trailing Acelerado Dinámico" if PAPER_TP1_EJECUTADO else "Stop Loss"
+            cerrar_total = True
+            if PAPER_TP1_EJECUTADO == True:
+                motivo = "Trailing Acelerado Dinámico" 
+            else:
+                motivo = "Stop Loss"
 
     elif PAPER_POSICION_ACTIVA == "Sell":
         if PAPER_TP1_EJECUTADO == False:
@@ -632,51 +667,95 @@ def paper_revisar_sl_tp(df):
                 PAPER_SIZE_BTC_RESTANTE = PAPER_SIZE_BTC * (1 - PORCENTAJE_CIERRE)
                 PAPER_TP1_EJECUTADO = True
                 PAPER_SL = PAPER_PRECIO_ENTRADA 
-                telegram_mensaje(f"🎯 TP1 ALCANZADO (+{PAPER_PNL_PARCIAL:.2f} USD). SL a Break Even. Iniciando Trailing...")
+                telegram_mensaje(f"🎯 TP1 ALCANZADO (+{PAPER_PNL_PARCIAL:.2f} USD). SL a Break Even. Iniciando Trailing Acelerado...")
 
         if PAPER_TP1_EJECUTADO == True:
-            distancia = PAPER_PRECIO_ENTRADA - close
-            atrs_ganados = distancia / atr_actual
-            if atrs_ganados >= 5.0: mult_din = 0.8  
-            elif atrs_ganados >= 3.0: mult_din = 1.2  
-            else: mult_din = MULT_TRAILING_BASE
+            distancia_a_favor = PAPER_PRECIO_ENTRADA - close
+            atrs_ganados = distancia_a_favor / atr_actual
             
-            nuevo_sl = close + (atr_actual * mult_din)
-            if nuevo_sl < PAPER_SL: PAPER_SL = nuevo_sl 
+            if atrs_ganados >= 5.0:
+                multiplicador_dinamico = 0.8  
+            elif atrs_ganados >= 3.0:
+                multiplicador_dinamico = 1.2  
+            else:
+                multiplicador_dinamico = MULT_TRAILING_BASE
+                
+            nuevo_sl = close + (atr_actual * multiplicador_dinamico)
+            
+            if nuevo_sl < PAPER_SL: 
+                PAPER_SL = nuevo_sl 
 
         if high >= PAPER_SL:
-            cerrar_total, motivo = True, "Trailing Acelerado Dinámico" if PAPER_TP1_EJECUTADO else "Stop Loss"
+            cerrar_total = True
+            if PAPER_TP1_EJECUTADO == True:
+                motivo = "Trailing Acelerado Dinámico" 
+            else:
+                motivo = "Stop Loss"
 
     if cerrar_total == True:
-        pnl_final = (PAPER_SL - PAPER_PRECIO_ENTRADA) * PAPER_SIZE_BTC_RESTANTE if PAPER_POSICION_ACTIVA == "Buy" else (PAPER_PRECIO_ENTRADA - PAPER_SL) * PAPER_SIZE_BTC_RESTANTE
+        if PAPER_POSICION_ACTIVA == "Buy":
+            pnl_final = (PAPER_SL - PAPER_PRECIO_ENTRADA) * PAPER_SIZE_BTC_RESTANTE 
+        else:
+            pnl_final = (PAPER_PRECIO_ENTRADA - PAPER_SL) * PAPER_SIZE_BTC_RESTANTE
         
         PAPER_BALANCE += pnl_final
         PAPER_PNL_GLOBAL += pnl_final
         PAPER_TRADES_TOTALES += 1
         
-        pnl_total = PAPER_PNL_PARCIAL + pnl_final if PAPER_TP1_EJECUTADO else pnl_final
-        if pnl_total > 0: PAPER_WIN += 1
-        else: PAPER_LOSS += 1
+        if PAPER_TP1_EJECUTADO == True:
+            pnl_total_trade = PAPER_PNL_PARCIAL + pnl_final 
+        else:
+            pnl_total_trade = pnl_final
             
-        winrate = (PAPER_WIN / PAPER_TRADES_TOTALES) * 100 if PAPER_TRADES_TOTALES > 0 else 0.0
+        if pnl_total_trade > 0: 
+            PAPER_WIN += 1
+        else: 
+            PAPER_LOSS += 1
+            
+        if PAPER_TRADES_TOTALES > 0:
+            winrate = (PAPER_WIN / PAPER_TRADES_TOTALES) * 100
+        else:
+            winrate = 0.0
+            
         crecimiento_pct = ((PAPER_BALANCE - PAPER_BALANCE_INICIAL) / PAPER_BALANCE_INICIAL) * 100
         
-        dec, ent, sal = PAPER_DECISION_ACTIVA, PAPER_PRECIO_ENTRADA, PAPER_SL
-        PAPER_POSICION_ACTIVA = PAPER_DECISION_ACTIVA = PAPER_PRECIO_ENTRADA = PAPER_SL = PAPER_TP1 = None
-        PAPER_SIZE_BTC = PAPER_SIZE_BTC_RESTANTE = PAPER_TP1_EJECUTADO = PAPER_PNL_PARCIAL = 0.0
+        dec = PAPER_DECISION_ACTIVA
+        ent = PAPER_PRECIO_ENTRADA
+        sal = PAPER_SL
+        
+        PAPER_POSICION_ACTIVA = None
+        PAPER_DECISION_ACTIVA = None
+        PAPER_PRECIO_ENTRADA = None
+        PAPER_SL = None
+        PAPER_TP1 = None
+        PAPER_SIZE_BTC = 0.0
+        PAPER_SIZE_BTC_RESTANTE = 0.0
+        PAPER_TP1_EJECUTADO = False
+        PAPER_PNL_PARCIAL = 0.0
 
-        telegram_mensaje(f"📤 TRADE CERRADO: Salida por {motivo}.\n💵 G/P Neta: {pnl_total:.2f} USD\n📊 Balance Actual: {PAPER_BALANCE:.2f} USD\nWinrate: {winrate:.1f}%")
-        return {"decision": dec, "motivo": motivo, "entrada": ent, "salida": sal, "pnl": pnl_total, "balance": PAPER_BALANCE}
+        telegram_mensaje(f"📤 TRADE CERRADO: Salida por {motivo}.\n💵 G/P Neta: {pnl_total_trade:.2f} USD\n📊 Balance Actual: {PAPER_BALANCE:.2f} USD\nWinrate: {winrate:.1f}%")
+        return {"decision": dec, "motivo": motivo, "entrada": ent, "salida": sal, "pnl": pnl_total_trade, "balance": PAPER_BALANCE}
 
     return None
 
 def risk_management_check():
-    global PAPER_PAUSE_UNTIL, PAPER_STOPPED_TODAY, PAPER_DAILY_START_BALANCE, PAPER_CURRENT_DAY, PAPER_BALANCE, PAPER_CONSECUTIVE_LOSSES
+    global PAPER_PAUSE_UNTIL
+    global PAPER_STOPPED_TODAY
+    global PAPER_DAILY_START_BALANCE
+    global PAPER_CURRENT_DAY
+    global PAPER_BALANCE
+    global PAPER_CONSECUTIVE_LOSSES
+    
     hoy_utc = datetime.now(timezone.utc).date()
+    
     if PAPER_CURRENT_DAY != hoy_utc:
-        PAPER_CURRENT_DAY, PAPER_DAILY_START_BALANCE, PAPER_STOPPED_TODAY, PAPER_CONSECUTIVE_LOSSES = hoy_utc, PAPER_BALANCE, False, 0
+        PAPER_CURRENT_DAY = hoy_utc
+        PAPER_DAILY_START_BALANCE = PAPER_BALANCE
+        PAPER_STOPPED_TODAY = False
+        PAPER_CONSECUTIVE_LOSSES = 0
         
     porcentaje_drawdown = (PAPER_BALANCE - PAPER_DAILY_START_BALANCE) / PAPER_DAILY_START_BALANCE
+    
     if porcentaje_drawdown <= -MAX_DAILY_DRAWDOWN_PCT:
         if PAPER_STOPPED_TODAY == False:
             telegram_mensaje(f"🛑 PROTECCIÓN DE CAPITAL: Drawdown máximo alcanzado. Bot pausado.")
@@ -689,46 +768,92 @@ def risk_management_check():
 # ======================================================
 class InstitutionalStats:
     def __init__(self):
-        self.total_trades, self.wins, self.losses, self.partial_wins, self.total_rr, self.equity_curve = 0, 0, 0, 0, 0.0,[]
+        self.total_trades = 0
+        self.wins = 0
+        self.losses = 0
+        self.partial_wins = 0
+        self.total_rr = 0.0
+        self.equity_curve = []
+        self.trade_log =[]
+
     def register_trade(self, result_rr, partial=False):
         self.total_trades += 1
         self.total_rr += result_rr
-        if partial: self.partial_wins += 1
-        elif result_rr > 0: self.wins += 1
-        else: self.losses += 1
+        if partial: 
+            self.partial_wins += 1
+        elif result_rr > 0: 
+            self.wins += 1
+        else: 
+            self.losses += 1
         self.equity_curve.append(self.total_rr)
-    def winrate(self): return (self.wins / self.total_trades) * 100 if self.total_trades > 0 else 0.0
-    def avg_rr(self): return self.total_rr / self.total_trades if self.total_trades > 0 else 0.0
+
+    def winrate(self):
+        if self.total_trades > 0:
+            return (self.wins / self.total_trades) * 100 
+        else:
+            return 0.0
+
+    def avg_rr(self):
+        if self.total_trades > 0:
+            return self.total_rr / self.total_trades 
+        else:
+            return 0.0
 
 class ExternalBOSDetector:
     def __init__(self, lookback=50):
         self.lookback = lookback
+
     def detect_swings(self, df):
-        altos, bajos = df['high'].values, df['low'].values
-        return max(altos[-self.lookback:]), min(bajos[-self.lookback:])
+        altos = df['high'].values
+        bajos = df['low'].values
+        swing_alto_reciente = max(altos[-self.lookback:])
+        swing_bajo_reciente = min(bajos[-self.lookback:])
+        return swing_alto_reciente, swing_bajo_reciente
+
     def is_bos_externo(self, df):
         alto_est, bajo_est = self.detect_swings(df)
         cierre = df['close'].iloc[-1]
-        return cierre > alto_est, cierre < bajo_est, alto_est, bajo_est
+        
+        if cierre > alto_est:
+            rup_alza = True
+        else:
+            rup_alza = False
+            
+        if cierre < bajo_est:
+            rup_baja = True
+        else:
+            rup_baja = False
+            
+        return rup_alza, rup_baja, alto_est, bajo_est
 
 class PullbackValidator:
     def __init__(self, tolerance=0.3):
         self.tolerance = tolerance
+
     def es_pullback_valido(self, df, nivel, direccion):
         precio = df['close'].iloc[-1]
-        if direccion == "long": return precio <= nivel * (1 - self.tolerance / 100)
-        if direccion == "short": return precio >= nivel * (1 + self.tolerance / 100)
+        if direccion == "long":
+            if precio <= nivel * (1 - self.tolerance / 100):
+                return True
+            return False
+        if direccion == "short":
+            if precio >= nivel * (1 + self.tolerance / 100):
+                return True
+            return False
         return False
 
 class PartialTPManager:
     def __init__(self):
-        self.tp1_hit, self.tp2_hit = False, False
+        self.tp1_hit = False
+        self.tp2_hit = False
+        
     def gestionar_tp_parcial(self, entry, tp1, tp2, price, side):
         return {"cerrar_50": False, "cerrar_total": False, "evento": None} 
 
 class InstitutionalLogger:
     def __init__(self, telegram_send_func):
         self.send_telegram = telegram_send_func
+        
     def log_operacion_completa(self, data):
         self.send_telegram("📊 REPORTE DE SISTEMA INSTITUCIONAL EXTERNO")
 
@@ -741,10 +866,12 @@ class InstitutionalSecondarySystem:
         self.logger = InstitutionalLogger(telegram_send_func)
 
 # ======================================================
-# LOOP PRINCIPAL 
+# LOOP PRINCIPAL Y EJECUCIÓN GROQ VISION
 # ======================================================
 def run_bot():
-    telegram_mensaje("🤖 BOT V100.0 BYBIT REAL INICIADO.\nConfiguración GROQ VISION AI (Multimodal).\nLos Patrones Rígidos han sido Eliminados.")
+    mensaje_inicio = "🤖 BOT V101.0 BYBIT REAL INICIADO.\nCerebro Multimodal LLaVA 90B Vision Activo.\nAnálisis Holístico de Mercado en curso."
+    telegram_mensaje(mensaje_inicio)
+    
     sistema_institucional = InstitutionalSecondarySystem(telegram_mensaje)
     ultima_vela_operada = None
 
@@ -758,47 +885,42 @@ def run_bot():
             precio_mercado = df['close'].iloc[-1] 
             tiempo_vela_cerrada = df.index[-2] 
 
-            # Detección integral con POLARIDAD V99.0
-            soporte_horiz, resistencia_horiz, canal_sup, canal_inf, slope, intercept, tendencia_macro, max_previo, min_previo = detectar_zonas_mercado(df, idx_eval)
+            en_zona_compra, en_zona_venta, log_zonas = evaluar_impacto_zonas(df, idx_eval)
             
             razones_para_entrar =[]
+            decision_final = None
             
             if PAPER_POSICION_ACTIVA is None:
-                # 1. EVALUAR SI ESTAMOS EN ZONAS CALIENTES
-                en_zona_compra, en_zona_venta, log_zonas = evaluar_impacto_zonas(df, soporte_horiz, resistencia_horiz, canal_sup, canal_inf, tendencia_macro, max_previo, min_previo, idx=idx_eval)
-                decision_final = None
 
-                # 2. SISTEMA ANTI-SPAM (No invocar a la IA si ya operamos esta vela)
                 if ultima_vela_operada == tiempo_vela_cerrada:
-                    lista_log =["Vela 5m bloqueada por Anti-Spam."]
+                    lista_log =["Vela de 5m bloqueada por Anti-Spam."]
                 else:
-                    # 3. ACTIVAR CEREBRO GROQ SI ESTAMOS EN ZONA
                     if en_zona_compra or en_zona_venta:
-                        lista_log =["ZONAS DETECTADAS: Consultando a Groq Vision AI..."]
+                        lista_log =["🔥 PRECIO EN ZONA CRÍTICA: Despertando a Groq Vision AI para análisis holístico..."]
                         
-                        # Generamos gráfico limpio (Sin Buy/Sell markers) para no sesgar a la IA
-                        fig_neutral = generar_grafico_entrada(df, "ANALISIS", soporte_horiz, resistencia_horiz, slope, intercept, ["Evaluando Price Action..."])
+                        # Genera imagen neutral (Sin dibujar compras o ventas prematuras)
+                        fig_neutral = generar_grafico_entrada(df, "ANALISIS", log_zonas['soporte'], log_zonas['resistencia'], log_zonas['slope'], log_zonas['intercept'], ["Verificando estructura general y fuerza del precio..."])
+                        
                         if fig_neutral is not None:
                             img_base64 = fig_to_base64(fig_neutral)
                             plt.close(fig_neutral)
                             
-                            # Hablamos con la IA
                             decision_ia, razon_ia = analizar_con_groq(df, idx_eval, log_zonas, img_base64)
-                            lista_log.append(f"Respuesta Groq: {decision_ia} - {razon_ia}")
+                            lista_log.append(f"🤖 Groq determinó: {decision_ia}")
+                            lista_log.append(f"🧠 Argumento: {razon_ia}")
                             
-                            # Filtro Supremo: La IA manda, pero con restricciones espaciales lógicas
+                            # Filtro estricto: La IA no puede ordenar comprar si la matemática espacial dice que es resistencia
                             if decision_ia == "BUY" and en_zona_compra:
                                 decision_final = "Buy"
-                                razones_para_entrar.append(f"🧠 Groq AI Action: {razon_ia}")
+                                razones_para_entrar.append(f"Análisis IA: {razon_ia}")
                             elif decision_ia == "SELL" and en_zona_venta:
                                 decision_final = "Sell"
-                                razones_para_entrar.append(f"🧠 Groq AI Action: {razon_ia}")
+                                razones_para_entrar.append(f"Análisis IA: {razon_ia}")
                     else:
-                        lista_log =["El precio no está en Zonas Clave. IA en reposo."]
+                        lista_log =["El precio se encuentra flotando fuera de zonas clave. IA en reposo."]
                         
-                log_colab(df, tendencia_macro, slope, soporte_horiz, resistencia_horiz, decision_final, lista_log, log_zonas, idx_eval)
+                log_colab(df, log_zonas.get('tendencia_macro'), log_zonas.get('slope', 0), log_zonas.get('soporte', 0), log_zonas.get('resistencia', 0), decision_final, lista_log, log_zonas, idx_eval)
 
-                # 4. EJECUTAR DECISIÓN DE LA IA
                 if decision_final is not None:
                     if risk_management_check():
                         atr_entrada = df['atr'].iloc[-1]
@@ -806,16 +928,15 @@ def run_bot():
                         
                         if apertura:
                             ultima_vela_operada = tiempo_vela_cerrada
-                            texto = f"📌 OPERACIÓN {decision_final.upper()} APROBADA POR IA (5m)\n💰 Entrada: {precio_mercado:.2f}\n📍 SL: {PAPER_SL:.2f} | TP1: {PAPER_TP1:.2f}\n{razones_para_entrar[0]}"
+                            
+                            texto = f"📌 OPERACIÓN {decision_final.upper()} APROBADA POR VISION AI (5m)\n💰 Entrada: {precio_mercado:.2f}\n📍 SL: {PAPER_SL:.2f} | TP1: {PAPER_TP1:.2f}\n🧠 Justificación: {razones_para_entrar[0]}"
                             telegram_mensaje(texto)
                             
-                            # Gráfico final con el marcador de Buy/Sell pintado
-                            fig_final = generar_grafico_entrada(df, decision_final, soporte_horiz, resistencia_horiz, slope, intercept, razones_para_entrar)
+                            fig_final = generar_grafico_entrada(df, decision_final, log_zonas['soporte'], log_zonas['resistencia'], log_zonas['slope'], log_zonas['intercept'], razones_para_entrar)
                             if fig_final is not None: 
                                 telegram_grafico(fig_final)
                                 plt.close(fig_final)
 
-            # 5. GESTIÓN DE SALIDA DE TRADES ACTIVOS
             if PAPER_POSICION_ACTIVA is not None:
                 datos_cierre = paper_revisar_sl_tp(df)
                 if datos_cierre is not None:

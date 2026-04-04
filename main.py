@@ -162,7 +162,7 @@ def decision_ia(prompt):
     try:
         r = client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
-            model="llama-3.1-70b-versatile",
+            model="llama-3.3-70b",
             temperature=0.2
         )
 

@@ -34,7 +34,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 client = Groq(api_key=GROQ_API_KEY)
 
 # Usaremos el modelo Vision de Llama 3.2 en Groq
-MODELO_GROQ = "llama-3.2-11b-vision-preview"
+MODELO_GROQ = "llama-3.2-90b-vision-preview"
 
 plt.rcParams['figure.figsize'] = (12, 6)
 

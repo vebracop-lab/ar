@@ -1,7 +1,10 @@
-# BOT TRADING V98.3 BYBIT REAL – GROQ IA (RAILWAY READY)
+# BOT TRADING V99.0 BYBIT REAL – GROQ IA (RAILWAY READY)
 # ======================================================
-# IA GROQ (LLaMA 3.3 Versatile) con análisis contextual avanzado
-# y gestión de riesgos dinámica (SL, TP1 fijo, TP2 dinámico con trailing)
+# IA GROQ (LLaMA 3.3 Versatile) con análisis contextual avanzado:
+# - Percepción de EMA como soporte/resistencia dinámico
+# - MACD + RSI + Velas + Estructura de mercado
+# - Autoaprendizaje cada 10 trades (análisis de errores y ajuste de sesgo)
+# - Gestión de riesgos dinámica con SL, TP1 fijo, TP2 con trailing
 # ======================================================
 
 import os
@@ -14,6 +17,7 @@ import pandas as pd
 import textwrap
 from scipy.stats import linregress
 from datetime import datetime, timezone
+from collections import deque
 
 import matplotlib
 matplotlib.use('Agg')
@@ -34,11 +38,11 @@ RISK_PER_TRADE = 0.02        # 2% del balance por trade
 LEVERAGE = 10
 SLEEP_SECONDS = 60
 
-# Parámetros por defecto (se sobreescriben si IA los modifica)
+# Parámetros por defecto (pueden ajustarse por aprendizaje)
 DEFAULT_SL_MULT = 1.5
 DEFAULT_TP1_MULT = 2.5
-DEFAULT_TP2_MULT = 4.0        # TP2 más lejano
-DEFAULT_TRAILING_MULT = 2.0   # Múltiplo de ATR para trailing después de TP1
+DEFAULT_TP2_MULT = 4.0
+DEFAULT_TRAILING_MULT = 2.0
 
 PORCENTAJE_CIERRE_TP1 = 0.5   # Cerrar 50% en TP1
 
@@ -60,17 +64,29 @@ PAPER_SIZE_BTC = 0.0
 PAPER_SIZE_BTC_RESTANTE = 0.0
 PAPER_TP1_EJECUTADO = False
 PAPER_PNL_PARCIAL = 0.0
-PAPER_SL_ACTUAL = None            # SL dinámico después de TP1
+PAPER_SL_ACTUAL = None
 PAPER_WIN = 0
 PAPER_LOSS = 0
 PAPER_TRADES_TOTALES = 0
 PAPER_LAST_10_PNL = []
+
+# Historial para aprendizaje
+TRADE_HISTORY = []  # Cada trade: {fecha, decision, precio_entrada, precio_salida, pnl, razones_ia, sl_mult_usado, tp1_mult_usado, tp2_mult_usado, trailing_mult_usado, resultado_win}
 
 # Control de drawdown diario
 MAX_DAILY_DRAWDOWN_PCT = 0.20
 PAPER_DAILY_START_BALANCE = PAPER_BALANCE_INICIAL
 PAPER_STOPPED_TODAY = False
 PAPER_CURRENT_DAY = None
+
+# Parámetros adaptativos (aprendizaje)
+ADAPTIVE_BIAS = 0.0   # Rango -0.3 a +0.3, sesgo para Buy (+) o Sell (-)
+ADAPTIVE_SL_MULT = DEFAULT_SL_MULT
+ADAPTIVE_TP1_MULT = DEFAULT_TP1_MULT
+ADAPTIVE_TP2_MULT = DEFAULT_TP2_MULT
+ADAPTIVE_TRAILING_MULT = DEFAULT_TRAILING_MULT
+TRADES_SIN_APRENDER = 0
+ULTIMO_APRENDIZAJE = None
 
 # ======================================================
 # CREDENCIALES Y TELEGRAM
@@ -107,7 +123,7 @@ def telegram_grafico(fig):
         print(f"Error enviando foto: {e}")
 
 # ======================================================
-# DATOS Y TÉCNICO
+# DATOS Y TÉCNICO (mejorado con MACD)
 # ======================================================
 def obtener_velas(limit=150):
     url = f"{BASE_URL}/v5/market/kline"
@@ -123,12 +139,15 @@ def obtener_velas(limit=150):
     return df
 
 def calcular_indicadores(df):
+    # EMA20
     df['ema20'] = df['close'].ewm(span=20).mean()
+    # ATR
     high_low = df['high'] - df['low']
     high_close = (df['high'] - df['close'].shift()).abs()
     low_close = (df['low'] - df['close'].shift()).abs()
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     df['atr'] = tr.rolling(14).mean()
+    # RSI
     delta = df['close'].diff()
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
@@ -136,6 +155,13 @@ def calcular_indicadores(df):
     avg_loss = loss.rolling(window=14).mean()
     rs = avg_gain / avg_loss
     df['rsi'] = 100 - (100 / (1 + rs))
+    # MACD
+    exp1 = df['close'].ewm(span=12, adjust=False).mean()
+    exp2 = df['close'].ewm(span=26, adjust=False).mean()
+    df['macd'] = exp1 - exp2
+    df['signal'] = df['macd'].ewm(span=9, adjust=False).mean()
+    df['macd_hist'] = df['macd'] - df['signal']
+    # EMA touch
     df['ema_touch'] = (df['low'] <= df['ema20']) & (df['high'] >= df['ema20'])
     return df.dropna()
 
@@ -155,8 +181,43 @@ def detectar_zonas_mercado(df, idx=-2, ventana_macro=120):
     return soporte_horiz, resistencia_horiz, slope, intercept, tendencia_macro
 
 # ======================================================
-# ANÁLISIS DE VELAS (igual que antes)
+# ANÁLISIS CONTEXTUAL ENRIQUECIDO (para que la IA "vea" la gráfica)
 # ======================================================
+def analizar_posicion_respecto_ema(df, idx=-2):
+    """Describe si el precio está encima, debajo, tocando o cruzando la EMA20, y si la EMA actúa como soporte/resistencia."""
+    precio = df['close'].iloc[idx]
+    ema = df['ema20'].iloc[idx]
+    diff_pct = (precio - ema) / ema * 100
+    # Velas anteriores
+    precio_ant = df['close'].iloc[idx-1] if idx-1 >= 0 else precio
+    ema_ant = df['ema20'].iloc[idx-1] if idx-1 >= 0 else ema
+    
+    if abs(diff_pct) < 0.15:
+        relacion = "PRECIO SOBRE LA EMA20 (tocando exactamente)"
+    elif precio > ema:
+        relacion = f"PRECIO ENCIMA DE EMA20 (+{diff_pct:.2f}%)"
+    else:
+        relacion = f"PRECIO DEBAJO DE EMA20 ({diff_pct:.2f}%)"
+    
+    # Detectar si la EMA ha actuado como soporte o resistencia en las últimas 5 velas
+    toques = 0
+    for i in range(max(0, idx-5), idx+1):
+        if df['low'].iloc[i] <= df['ema20'].iloc[i] <= df['high'].iloc[i]:
+            toques += 1
+    if toques >= 3:
+        rol = "EMA20 está actuando como SOPORTE/RESISTENCIA dinámico (múltiples toques)."
+    else:
+        rol = "EMA20 no muestra rol claro de soporte/resistencia."
+    
+    # Detectar cruce reciente
+    cruce = ""
+    if idx-1 >= 0:
+        if precio_ant <= ema_ant and precio > ema:
+            cruce = "¡CRUCE ALCISTA RECIENTE! Precio superó EMA20."
+        elif precio_ant >= ema_ant and precio < ema:
+            cruce = "¡CRUCE BAJISTA RECIENTE! Precio cayó debajo de EMA20."
+    return relacion, rol, cruce, diff_pct
+
 def analizar_velas_detallado(df, num_velas=7):
     ultimas = df.iloc[-num_velas-1:-1]
     analisis = []
@@ -192,70 +253,175 @@ def analizar_rechazo_resistencia(df, resistencia):
                 return f"RECHAZO en resistencia ({resistencia:.0f}) con mecha superior del {(mecha/rango)*100:.0f}%"
     return "Sin rechazo claro"
 
+def analizar_macd_rsi(df, idx=-2):
+    rsi = df['rsi'].iloc[idx]
+    macd = df['macd'].iloc[idx]
+    signal = df['signal'].iloc[idx]
+    hist = df['macd_hist'].iloc[idx]
+    # Tendencia MACD
+    if macd > signal and hist > 0:
+        tend_macd = "ALCISTA (MACD arriba de señal, histograma positivo)"
+    elif macd < signal and hist < 0:
+        tend_macd = "BAJISTA (MACD debajo de señal, histograma negativo)"
+    elif macd > signal and hist < 0:
+        tend_macd = "POSIBLE CRUCE ALCISTA (divergencia positiva)"
+    else:
+        tend_macd = "NEUTRAL o debilitamiento"
+    # RSI
+    if rsi > 70:
+        rsi_estado = "SOBRECOMPRADO (sobre 70) - posible retroceso"
+    elif rsi < 30:
+        rsi_estado = "SOBREVENDIDO (bajo 30) - posible rebote"
+    else:
+        rsi_estado = f"NEUTRAL ({rsi:.1f})"
+    return rsi, rsi_estado, tend_macd, hist
+
 # ======================================================
-# IA GROQ CON SUGERENCIA DE SL/TP DINÁMICOS
+# AUTOAPRENDIZAJE CADA 10 TRADES
+# ======================================================
+def aprender_de_trades():
+    global ADAPTIVE_BIAS, ADAPTIVE_SL_MULT, ADAPTIVE_TP1_MULT, ADAPTIVE_TP2_MULT, ADAPTIVE_TRAILING_MULT
+    global TRADES_SIN_APRENDER, ULTIMO_APRENDIZAJE
+    
+    if len(TRADE_HISTORY) < 10:
+        return
+    
+    # Solo aprender si han pasado al menos 10 trades desde el último aprendizaje
+    if ULTIMO_APRENDIZAJE is not None and len(TRADE_HISTORY) - ULTIMO_APRENDIZAJE < 10:
+        return
+    
+    # Analizar últimos 10 trades
+    ultimos = TRADE_HISTORY[-10:]
+    wins = [t for t in ultimos if t['resultado_win']]
+    losses = [t for t in ultimos if not t['resultado_win']]
+    winrate = len(wins) / 10.0
+    
+    # Analizar decisiones erróneas comunes
+    razones_loss = []
+    for loss in losses:
+        razones_loss.extend(loss.get('razones_ia', []))
+    # Contar frecuencias
+    from collections import Counter
+    counter = Counter(razones_loss)
+    errores_comunes = counter.most_common(3)
+    
+    # Ajustar sesgo adaptativo
+    if winrate < 0.4:
+        # Si ganamos poco, reducir sesgo y ser más conservadores
+        ADAPTIVE_BIAS = max(-0.2, ADAPTIVE_BIAS - 0.05)
+        ADAPTIVE_SL_MULT = min(2.5, ADAPTIVE_SL_MULT * 1.1)  # SL más lejano (menos riesgo de salir temprano)
+        ADAPTIVE_TP1_MULT = max(1.5, ADAPTIVE_TP1_MULT * 0.9)  # TP más cerca
+    elif winrate > 0.6:
+        # Si ganamos bien, mantener o aumentar ligeramente confianza
+        ADAPTIVE_BIAS = min(0.3, ADAPTIVE_BIAS + 0.02)
+        ADAPTIVE_SL_MULT = max(1.0, ADAPTIVE_SL_MULT * 0.95)
+        ADAPTIVE_TP1_MULT = min(4.0, ADAPTIVE_TP1_MULT * 1.05)
+    else:
+        # Estable
+        pass
+    
+    # Análisis detallado para enviar a Telegram
+    mensaje = f"📚 AUTOAPRENDIZAJE (últimos 10 trades)\nWinrate: {winrate*100:.1f}%\nErrores comunes: {errores_comunes}\nNuevo sesgo: {ADAPTIVE_BIAS:.2f}\nSL mult: {ADAPTIVE_SL_MULT:.2f}\nTP1 mult: {ADAPTIVE_TP1_MULT:.2f}"
+    telegram_mensaje(mensaje)
+    print(mensaje)
+    
+    ULTIMO_APRENDIZAJE = len(TRADE_HISTORY)
+
+# ======================================================
+# IA GROQ CON ANÁLISIS VISUAL ENRIQUECIDO Y PARÁMETROS ADAPTATIVOS
 # ======================================================
 def analizar_con_groq_texto(df, soporte, resistencia, tendencia, slope, intercept, idx=-2):
     precio = df['close'].iloc[idx]
     atr = df['atr'].iloc[idx]
-    rsi = df['rsi'].iloc[idx]
-    ema = df['ema20'].iloc[idx]
+    # Nuevos análisis
+    relacion_ema, rol_ema, cruce_ema, diff_ema_pct = analizar_posicion_respecto_ema(df, idx)
+    rsi, rsi_estado, tend_macd, hist_macd = analizar_macd_rsi(df, idx)
     analisis_velas = analizar_velas_detallado(df)
     analisis_ema = analizar_ema_cruce(df)
     analisis_rechazo = analizar_rechazo_resistencia(df, resistencia)
-
+    
+    # Incorporar sesgo adaptativo al prompt
+    sesgo_texto = ""
+    if ADAPTIVE_BIAS > 0.05:
+        sesgo_texto = f" (sesgo adaptativo actual hacia BUY: +{ADAPTIVE_BIAS:.2f})"
+    elif ADAPTIVE_BIAS < -0.05:
+        sesgo_texto = f" (sesgo adaptativo actual hacia SELL: {ADAPTIVE_BIAS:.2f})"
+    
     prompt = f"""
-Eres un trader institucional. Analiza BTCUSDT en gráfico de 5 minutos y decide dirección (Buy/Sell/Hold). Además, recomienda niveles de riesgo basados en ATR actual ({atr:.2f}).
+Eres un trader institucional con amplia experiencia en BTCUSDT en gráfico de 5 minutos. Analiza TODO el contexto como si estuvieras viendo la imagen en tiempo real. Tu análisis debe ser humano, considerando la estructura de mercado, la EMA20 como posible soporte/resistencia, el MACD, el RSI y el patrón de velas.
 
-DATOS:
-- Precio actual (última vela cerrada): {precio:.2f}
-- Soporte: {soporte:.2f}, Resistencia: {resistencia:.2f}
-- Tendencia macro: {tendencia}, Slope: {slope:.6f}
-- RSI: {rsi:.1f}, EMA20: {ema:.2f}
+DATOS ACTUALES (última vela cerrada):
+- Precio: {precio:.2f}
+- ATR (volatilidad): {atr:.2f}
+- Soporte horizontal: {soporte:.2f}
+- Resistencia horizontal: {resistencia:.2f}
+- Tendencia macro (120 velas): {tendencia}, pendiente: {slope:.6f}
+- RSI: {rsi:.1f} - {rsi_estado}
+- MACD: {tend_macd}, histograma: {hist_macd:.2f}
+- EMA20: {df['ema20'].iloc[idx]:.2f}
+- Posición respecto a EMA20: {relacion_ema}. {rol_ema} {cruce_ema}
 - {analisis_ema}
 - {analisis_rechazo}
 
-VELAS RECIENTES:
+VELAS RECIENTES (últimas 7):
 {analisis_velas}
 
 INSTRUCCIONES:
-1. Decide "Buy", "Sell" o "Hold". Si hay rechazo en resistencia + precio debajo EMA20 -> Sell. Si soporte + precio encima EMA20 -> Buy.
-2. Si la decisión es Buy o Sell, debes sugerir multiplicadores para SL y TP basados en el ATR (siendo conservadores). Usa valores entre 1.0 y 3.0 para SL, entre 2.0 y 5.0 para TP1, entre 3.0 y 8.0 para TP2. También sugiere un multiplicador para el trailing stop después de TP1 (entre 1.5 y 3.5).
-3. TP1 será fijo y cerrará el 50% de la posición. TP2 será dinámico con trailing stop que se ajusta con el precio.
+1. Decide "Buy", "Sell" o "Hold". Sé realista: si el precio está exactamente en la EMA20 y ésta ha actuado como soporte/resistencia, espera confirmación (vela de rechazo o quiebre). No entres sin contexto.
+2. Si decides Buy o Sell, justifica con al menos 2 razones claras basadas en los datos (ej: "precio rebotó en soporte + MACD alcista", "rechazo en resistencia + RSI sobrecomprado").
+3. Recomienda multiplicadores para SL, TP1, TP2 y trailing basados en el ATR actual y la volatilidad. Sé conservador: SL entre 1.0x y 2.5x ATR, TP1 entre 2.0x y 4.0x, TP2 entre 3.0x y 6.0x, trailing entre 1.5x y 3.0x.
+4. TP1 será fijo y cerrará el 50% de la posición. TP2 será dinámico con trailing stop después de alcanzar TP1.
+5. IMPORTANTE: Si el mercado está lateral o sin dirección clara, prefiere "Hold".
 
 Responde SOLO en JSON con este formato:
 {{
   "decision": "Buy/Sell/Hold",
-  "patron": "descripción del patrón",
-  "fuera_de_zona": false,
-  "razones": ["razón1","razón2"],
+  "patron": "nombre del patrón detectado (ej: 'Rebote en soporte', 'Rechazo en resistencia', 'Quiebre de EMA20', 'Doji en zona clave')",
+  "razones": ["razón1","razón2","razón3"],
   "sl_mult": 1.5,
   "tp1_mult": 2.5,
   "tp2_mult": 4.0,
   "trailing_mult": 2.0
 }}
-Si es Hold, los multiplicadores pueden ser nulos.
+Si es Hold, los multiplicadores pueden ser nulos o por defecto.
 """
     try:
         completion = client.chat.completions.create(
             model=MODELO_GROQ,
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
-            temperature=0.1
+            temperature=0.15
         )
         datos = json.loads(completion.choices[0].message.content)
-        # Asegurar valores por defecto si faltan
-        datos.setdefault("sl_mult", DEFAULT_SL_MULT)
-        datos.setdefault("tp1_mult", DEFAULT_TP1_MULT)
-        datos.setdefault("tp2_mult", DEFAULT_TP2_MULT)
-        datos.setdefault("trailing_mult", DEFAULT_TRAILING_MULT)
+        # Aplicar sesgo adaptativo (si la IA dijo Buy y sesgo es negativo, reconsiderar? Mejor modificar decisión ligeramente)
+        if ADAPTIVE_BIAS > 0.1 and datos.get("decision") == "Sell":
+            # Si tenemos sesgo fuerte a Buy y la IA dice Sell, pasar a Hold
+            if np.random.random() < abs(ADAPTIVE_BIAS):
+                datos["decision"] = "Hold"
+                datos["razones"].append("Sesgo adaptativo anuló señal contraria")
+        elif ADAPTIVE_BIAS < -0.1 and datos.get("decision") == "Buy":
+            if np.random.random() < abs(ADAPTIVE_BIAS):
+                datos["decision"] = "Hold"
+                datos["razones"].append("Sesgo adaptativo anuló señal contraria")
+        
+        # Usar multiplicadores adaptativos si la IA no los especifica o son extremos
+        sl_mult = datos.get("sl_mult", DEFAULT_SL_MULT)
+        tp1_mult = datos.get("tp1_mult", DEFAULT_TP1_MULT)
+        tp2_mult = datos.get("tp2_mult", DEFAULT_TP2_MULT)
+        trailing_mult = datos.get("trailing_mult", DEFAULT_TRAILING_MULT)
+        # Mezclar con adaptativos (media ponderada)
+        datos["sl_mult"] = 0.7 * sl_mult + 0.3 * ADAPTIVE_SL_MULT
+        datos["tp1_mult"] = 0.7 * tp1_mult + 0.3 * ADAPTIVE_TP1_MULT
+        datos["tp2_mult"] = 0.7 * tp2_mult + 0.3 * ADAPTIVE_TP2_MULT
+        datos["trailing_mult"] = 0.7 * trailing_mult + 0.3 * ADAPTIVE_TRAILING_MULT
+        
         return datos
     except Exception as e:
         print(f"Error Groq: {e}")
         return {"decision": "Hold", "razones": ["Error API"], "sl_mult": DEFAULT_SL_MULT, "tp1_mult": DEFAULT_TP1_MULT, "tp2_mult": DEFAULT_TP2_MULT, "trailing_mult": DEFAULT_TRAILING_MULT}
 
 # ======================================================
-# GESTIÓN DE RIESGO DINÁMICA (con SL/TP sugeridos por IA)
+# GESTIÓN DE RIESGO Y PAPER TRADING (similar, pero guardando historial)
 # ======================================================
 def risk_management_check():
     global PAPER_DAILY_START_BALANCE, PAPER_STOPPED_TODAY, PAPER_CURRENT_DAY, PAPER_BALANCE
@@ -271,7 +437,7 @@ def risk_management_check():
         return False
     return not PAPER_STOPPED_TODAY
 
-def paper_abrir_posicion(decision, precio, atr, sl_mult, tp1_mult, tp2_mult, trailing_mult):
+def paper_abrir_posicion(decision, precio, atr, sl_mult, tp1_mult, tp2_mult, trailing_mult, razones, patron):
     global PAPER_POSICION_ACTIVA, PAPER_PRECIO_ENTRADA, PAPER_SL_INICIAL, PAPER_TP1, PAPER_TP2
     global PAPER_TRAILING_MULT, PAPER_SIZE_BTC, PAPER_SIZE_BTC_RESTANTE, PAPER_TP1_EJECUTADO
     global PAPER_SL_ACTUAL, PAPER_BALANCE
@@ -294,7 +460,6 @@ def paper_abrir_posicion(decision, precio, atr, sl_mult, tp1_mult, tp2_mult, tra
     if distancia_riesgo == 0:
         return False
 
-    # Tamaño en dólares con apalancamiento
     size_usd = min((riesgo_usd / distancia_riesgo) * precio, PAPER_BALANCE * LEVERAGE)
     size_btc = size_usd / precio
 
@@ -307,16 +472,22 @@ def paper_abrir_posicion(decision, precio, atr, sl_mult, tp1_mult, tp2_mult, tra
     PAPER_SIZE_BTC = size_btc
     PAPER_SIZE_BTC_RESTANTE = size_btc
     PAPER_TP1_EJECUTADO = False
-    PAPER_SL_ACTUAL = sl   # SL inicial
+    PAPER_SL_ACTUAL = sl
 
-    telegram_mensaje(f"📌 OPERACIÓN {decision.upper()} | Precio: {precio:.2f} | SL: {sl:.2f} | TP1: {tp1:.2f} | TP2: {tp2:.2f} | Trailing mult: {trailing_mult}")
+    # Guardar razones para el historial
+    global ULTIMA_RAZONES, ULTIMO_PATRON, ULTIMOS_MULTIS
+    ULTIMA_RAZONES = razones
+    ULTIMO_PATRON = patron
+    ULTIMOS_MULTIS = (sl_mult, tp1_mult, tp2_mult, trailing_mult)
+
+    telegram_mensaje(f"📌 OPERACIÓN {decision.upper()} | Precio: {precio:.2f} | SL: {sl:.2f} | TP1: {tp1:.2f} | TP2: {tp2:.2f} | Trailing mult: {trailing_mult}\nRazones: {' | '.join(razones[:2])}")
     return True
 
 def paper_revisar_sl_tp(df, soporte, resistencia, slope, intercept):
     global PAPER_POSICION_ACTIVA, PAPER_PRECIO_ENTRADA, PAPER_SL_INICIAL, PAPER_TP1, PAPER_TP2
     global PAPER_TRAILING_MULT, PAPER_SIZE_BTC, PAPER_SIZE_BTC_RESTANTE, PAPER_TP1_EJECUTADO
     global PAPER_SL_ACTUAL, PAPER_BALANCE, PAPER_PNL_PARCIAL, PAPER_WIN, PAPER_LOSS
-    global PAPER_TRADES_TOTALES, PAPER_LAST_10_PNL
+    global PAPER_TRADES_TOTALES, PAPER_LAST_10_PNL, TRADE_HISTORY
 
     if PAPER_POSICION_ACTIVA is None:
         return None
@@ -329,20 +500,18 @@ def paper_revisar_sl_tp(df, soporte, resistencia, slope, intercept):
     cerrar_total = False
     motivo = ""
 
-    # Comprobar TP1 (cierre parcial)
+    # TP1 parcial
     if not PAPER_TP1_EJECUTADO:
         if (PAPER_POSICION_ACTIVA == "Buy" and high >= PAPER_TP1) or (PAPER_POSICION_ACTIVA == "Sell" and low <= PAPER_TP1):
-            # Cerrar 50%
             beneficio_parcial = (PAPER_TP1 - PAPER_PRECIO_ENTRADA) * (PAPER_SIZE_BTC * PORCENTAJE_CIERRE_TP1) if PAPER_POSICION_ACTIVA == "Buy" else (PAPER_PRECIO_ENTRADA - PAPER_TP1) * (PAPER_SIZE_BTC * PORCENTAJE_CIERRE_TP1)
             PAPER_BALANCE += beneficio_parcial
             PAPER_PNL_PARCIAL = beneficio_parcial
             PAPER_SIZE_BTC_RESTANTE = PAPER_SIZE_BTC * (1 - PORCENTAJE_CIERRE_TP1)
             PAPER_TP1_EJECUTADO = True
-            # Mover SL a break-even (precio de entrada)
             PAPER_SL_ACTUAL = PAPER_PRECIO_ENTRADA
             telegram_mensaje(f"🎯 TP1 alcanzado. Beneficio parcial: +{beneficio_parcial:.2f} USD. SL movido a break-even. Resta {PAPER_SIZE_BTC_RESTANTE:.4f} BTC")
 
-    # Después de TP1, gestionar trailing stop dinámico hacia TP2
+    # Trailing después de TP1
     if PAPER_TP1_EJECUTADO:
         if PAPER_POSICION_ACTIVA == "Buy":
             nuevo_sl = close - (atr * PAPER_TRAILING_MULT)
@@ -352,7 +521,7 @@ def paper_revisar_sl_tp(df, soporte, resistencia, slope, intercept):
             if low <= PAPER_SL_ACTUAL:
                 cerrar_total = True
                 motivo = "Trailing Stop"
-        else:  # Sell
+        else:
             nuevo_sl = close + (atr * PAPER_TRAILING_MULT)
             if nuevo_sl < PAPER_SL_ACTUAL:
                 PAPER_SL_ACTUAL = nuevo_sl
@@ -361,7 +530,7 @@ def paper_revisar_sl_tp(df, soporte, resistencia, slope, intercept):
                 cerrar_total = True
                 motivo = "Trailing Stop"
     else:
-        # Antes de TP1, verificar SL inicial
+        # SL inicial
         if (PAPER_POSICION_ACTIVA == "Buy" and low <= PAPER_SL_INICIAL) or (PAPER_POSICION_ACTIVA == "Sell" and high >= PAPER_SL_INICIAL):
             cerrar_total = True
             motivo = "Stop Loss Inicial"
@@ -383,9 +552,35 @@ def paper_revisar_sl_tp(df, soporte, resistencia, slope, intercept):
         if len(PAPER_LAST_10_PNL) > 10:
             PAPER_LAST_10_PNL.pop(0)
         winrate = (PAPER_WIN / PAPER_TRADES_TOTALES) * 100 if PAPER_TRADES_TOTALES > 0 else 0
+
+        # Guardar en historial para aprendizaje
+        try:
+            trade_record = {
+                "fecha": datetime.now(timezone.utc).isoformat(),
+                "decision": PAPER_POSICION_ACTIVA,
+                "precio_entrada": PAPER_PRECIO_ENTRADA,
+                "precio_salida": precio_salida,
+                "pnl": pnl_total,
+                "razones_ia": ULTIMA_RAZONES,
+                "patron": ULTIMO_PATRON,
+                "sl_mult_usado": ULTIMOS_MULTIS[0],
+                "tp1_mult_usado": ULTIMOS_MULTIS[1],
+                "tp2_mult_usado": ULTIMOS_MULTIS[2],
+                "trailing_mult_usado": ULTIMOS_MULTIS[3],
+                "resultado_win": win_status
+            }
+            TRADE_HISTORY.append(trade_record)
+            # Llamar a aprendizaje cada 10 trades
+            global TRADES_SIN_APRENDER
+            TRADES_SIN_APRENDER += 1
+            if len(TRADE_HISTORY) % 10 == 0:
+                aprender_de_trades()
+        except Exception as e:
+            print(f"Error guardando historial: {e}")
+
         telegram_mensaje(f"📤 TRADE CERRADO ({motivo})\nPnL total: {pnl_total:.2f} USD\nBalance: {PAPER_BALANCE:.2f} USD\nWinrate: {winrate:.1f}%")
 
-        # Enviar gráfico de salida
+        # Gráfico
         fig = generar_grafico_salida(df, PAPER_POSICION_ACTIVA, PAPER_PRECIO_ENTRADA, precio_salida, pnl_total, win_status, soporte, resistencia, slope, intercept)
         telegram_grafico(fig)
         plt.close(fig)
@@ -395,7 +590,7 @@ def paper_revisar_sl_tp(df, soporte, resistencia, slope, intercept):
     return None
 
 # ======================================================
-# GRÁFICOS (versión simplificada)
+# GRÁFICOS (sin cambios significativos)
 # ======================================================
 def generar_grafico_entrada(df, decision, soporte, resistencia, slope, intercept, razones, patron):
     df_plot = df.tail(GRAFICO_VELAS_LIMIT).copy()
@@ -417,7 +612,7 @@ def generar_grafico_entrada(df, decision, soporte, resistencia, slope, intercept
         ax.scatter(entrada_x, df_plot['close'].iloc[-2]-50, s=300, marker='^', c='lime', edgecolors='black')
     else:
         ax.scatter(entrada_x, df_plot['close'].iloc[-2]+50, s=300, marker='v', c='red', edgecolors='black')
-    texto = f"GROQ V98.3: {decision.upper()}\nPatrón: {patron[:60]}\n{chr(10).join(razones[:2])}"
+    texto = f"GROQ V99.0: {decision.upper()}\nPatrón: {patron[:60]}\n{chr(10).join(razones[:2])}"
     ax.text(0.02, 0.98, texto, transform=ax.transAxes, fontsize=10, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='black', alpha=0.85))
     ax.set_facecolor('black'); fig.patch.set_facecolor('black'); ax.tick_params(colors='white')
     ax.grid(True, alpha=0.2)
@@ -455,9 +650,13 @@ def generar_grafico_salida(df, posicion, precio_entrada, precio_salida, pnl, win
 # LOOP PRINCIPAL
 # ======================================================
 def run_bot():
-    print("🤖 BOT V98.3 INICIADO - IA con gestión de riesgos dinámica (SL/TP sugeridos)")
-    telegram_mensaje("🤖 BOT V98.3 INICIADO: IA decide dirección y niveles de SL/TP dinámicos.")
+    print("🤖 BOT V99.0 INICIADO - IA con análisis contextual enriquecido y autoaprendizaje")
+    telegram_mensaje("🤖 BOT V99.0 INICIADO: Análisis de EMA como soporte/resistencia, MACD + RSI + Autoaprendizaje cada 10 trades.")
     ultima_vela_operada = None
+    global ULTIMA_RAZONES, ULTIMO_PATRON, ULTIMOS_MULTIS
+    ULTIMA_RAZONES = []
+    ULTIMO_PATRON = ""
+    ULTIMOS_MULTIS = (DEFAULT_SL_MULT, DEFAULT_TP1_MULT, DEFAULT_TP2_MULT, DEFAULT_TRAILING_MULT)
 
     while True:
         try:
@@ -468,7 +667,7 @@ def run_bot():
 
             soporte, resistencia, slope, intercept, tendencia = detectar_zonas_mercado(df, idx_eval)
 
-            print(f"\n💓 Heartbeat | Precio: {precio_mercado:.2f} | Sop: {soporte:.2f} | Res: {resistencia:.2f} | Trades: {PAPER_TRADES_TOTALES}")
+            print(f"\n💓 Heartbeat | Precio: {precio_mercado:.2f} | Sop: {soporte:.2f} | Res: {resistencia:.2f} | Trades: {PAPER_TRADES_TOTALES} | Sesgo: {ADAPTIVE_BIAS:.2f}")
 
             if PAPER_POSICION_ACTIVA is None and ultima_vela_operada != tiempo_vela_cerrada:
                 respuesta = analizar_con_groq_texto(df, soporte, resistencia, tendencia, slope, intercept, idx_eval)
@@ -482,13 +681,16 @@ def run_bot():
 
                 if decision in ["Buy", "Sell"] and risk_management_check():
                     atr_actual = df['atr'].iloc[-1]
-                    if paper_abrir_posicion(decision, precio_mercado, atr_actual, sl_mult, tp1_mult, tp2_mult, trailing_mult):
+                    if paper_abrir_posicion(decision, precio_mercado, atr_actual, sl_mult, tp1_mult, tp2_mult, trailing_mult, razones, patron):
                         ultima_vela_operada = tiempo_vela_cerrada
                         fig = generar_grafico_entrada(df, decision, soporte, resistencia, slope, intercept, razones, patron)
                         telegram_grafico(fig)
                         plt.close(fig)
                 else:
-                    print(f"Hold: {razones[0] if razones else 'Sin señal'}")
+                    if decision != "Hold":
+                        print(f"Hold (riesgo o drawdown): {razones[0] if razones else 'Sin señal'}")
+                    else:
+                        print(f"Hold: {razones[0] if razones else 'Sin señal'}")
 
             if PAPER_POSICION_ACTIVA is not None:
                 paper_revisar_sl_tp(df, soporte, resistencia, slope, intercept)

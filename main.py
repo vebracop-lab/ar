@@ -1,10 +1,13 @@
 
-# BOT TRADING V104.0 - FULL IA (SIN PATRONES)
-# ===========================================
-# - Eliminados TODOS los patrones de velas
-# - IA (Groq) toma TODAS las decisiones
-# - Usa EMA + RSI + ATR + contexto + imagen
-# - TP1 50% + TP2 dinámico con trailing inteligente
+# BOT TRADING V105.0 - IA FULL + LOG PRO + SIN ATR + SIN PATRONES
+# ================================================================
+# ✔ IA decide TODO (Groq)
+# ✔ EMA20 / EMA50
+# ✔ Soportes / Resistencias
+# ✔ Tendencia con slope
+# ✔ Gráfico profesional
+# ✔ Logs completos + estadísticas
+# ✔ TP1 fijo + TP2 trailing SIN ATR
 
 import os
 import time
@@ -16,7 +19,9 @@ import requests
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from datetime import datetime
 from groq import Groq
+from scipy.stats import linregress
 
 # ================= CONFIG =================
 SYMBOL = "BTCUSDT"
@@ -31,6 +36,7 @@ def obtener_velas():
     url = "https://api.bybit.com/v5/market/kline"
     params = {"category":"linear","symbol":SYMBOL,"interval":INTERVAL,"limit":200}
     data = requests.get(url, params=params).json()["result"]["list"][::-1]
+
     df = pd.DataFrame(data, columns=['time','open','high','low','close','volume','turnover'])
 
     for col in ['open','high','low','close']:
@@ -45,59 +51,46 @@ def indicadores(df):
     df['ema20'] = df['close'].ewm(span=20).mean()
     df['ema50'] = df['close'].ewm(span=50).mean()
 
-    tr = pd.concat([
-        df['high']-df['low'],
-        (df['high']-df['close'].shift()).abs(),
-        (df['low']-df['close'].shift()).abs()
-    ], axis=1).max(axis=1)
+    x = np.arange(len(df))
+    slope, intercept, _, _, _ = linregress(x, df['close'])
 
-    df['atr'] = tr.rolling(14).mean()
+    df['trend'] = slope
+    return df.dropna(), slope, intercept
 
-    delta = df['close'].diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-
-    rs = gain.rolling(14).mean() / loss.rolling(14).mean()
-    df['rsi'] = 100 - (100 / (1 + rs))
-
-    return df.dropna()
+# ================= SOPORTES =================
+def soportes_resistencias(df):
+    soporte = df['low'].rolling(20).min().iloc[-1]
+    resistencia = df['high'].rolling(20).max().iloc[-1]
+    return soporte, resistencia
 
 # ================= IA =================
-def analizar_con_groq(df, img_b64):
+def analizar_con_groq(df, img_b64, soporte, resistencia, slope):
     if not client_groq:
         return "WAIT", {}
 
     precio = df['close'].iloc[-1]
-    rsi = df['rsi'].iloc[-1]
     ema20 = df['ema20'].iloc[-1]
     ema50 = df['ema50'].iloc[-1]
-    atr = df['atr'].iloc[-1]
 
     prompt = f"""
-    Eres trader institucional.
+    Eres un trader institucional.
 
     Datos:
     Precio: {precio}
-    RSI: {rsi}
     EMA20: {ema20}
     EMA50: {ema50}
-    ATR: {atr}
+    Soporte: {soporte}
+    Resistencia: {resistencia}
+    Pendiente tendencia: {slope}
 
-    Analiza:
-    - estructura
-    - tendencia
-    - momentum
-    - velas
-    - EMA como soporte/resistencia
+    Analiza TODO el gráfico.
 
-    Decide:
-    BUY / SELL / WAIT
-
-    JSON:
+    Devuelve JSON:
     {{
       "decision":"BUY|SELL|WAIT",
       "confidence":0-100,
-      "trailing":"AGGRESSIVE|NORMAL|CONSERVATIVE",
+      "sl":precio,
+      "tp1":precio,
       "razon":"explicacion"
     }}
     """
@@ -130,60 +123,46 @@ class Bot:
         self.sl = None
         self.tp1 = None
         self.partial = False
-        self.trailing_mode = "NORMAL"
+        self.balance = 100
+        self.trades = 0
+        self.wins = 0
 
-    def abrir(self, side, price, atr, trailing):
+    def abrir(self, side, price, sl, tp1):
         self.pos = side
         self.entry = price
-        self.trailing_mode = trailing
+        self.sl = sl
+        self.tp1 = tp1
+        self.partial = False
 
-        if side == "BUY":
-            self.sl = price - atr * 1.5
-            self.tp1 = price + atr * 2.5
-        else:
-            self.sl = price + atr * 1.5
-            self.tp1 = price - atr * 2.5
-
-    def gestionar(self, price, atr):
+    def gestionar(self, price):
         if not self.pos:
             return
 
-        # TP1
         if not self.partial:
             if (self.pos=="BUY" and price>=self.tp1) or (self.pos=="SELL" and price<=self.tp1):
                 self.partial = True
                 self.sl = self.entry
-                print("TP1 -> SL BE")
+                print("TP1 alcanzado")
 
-        # trailing dinámico
         if self.partial:
-            dist = abs(price - self.entry) / atr
-
-            if dist >= 6:
-                mult = 0.6
-            elif dist >= 4:
-                mult = 0.9
-            elif dist >= 2:
-                mult = 1.2
-            else:
-                mult = 1.8
-
-            if self.trailing_mode == "AGGRESSIVE":
-                mult *= 0.7
-            elif self.trailing_mode == "CONSERVATIVE":
-                mult *= 1.3
-
+            profit = abs(price - self.entry)
             if self.pos == "BUY":
-                new_sl = price - atr * mult
+                new_sl = price - profit*0.3
                 if new_sl > self.sl:
                     self.sl = new_sl
             else:
-                new_sl = price + atr * mult
+                new_sl = price + profit*0.3
                 if new_sl < self.sl:
                     self.sl = new_sl
 
-        # cierre
         if (self.pos=="BUY" and price<=self.sl) or (self.pos=="SELL" and price>=self.sl):
+            self.trades += 1
+            if (self.pos=="BUY" and price>self.entry) or (self.pos=="SELL" and price<self.entry):
+                self.wins += 1
+                self.balance += 1
+            else:
+                self.balance -= 1
+
             print("Cierre trade")
             self.reset()
 
@@ -194,28 +173,48 @@ class Bot:
         self.tp1 = None
         self.partial = False
 
+    def stats(self):
+        winrate = (self.wins/self.trades*100) if self.trades>0 else 0
+        return f"Balance: {self.balance} | Trades: {self.trades} | Winrate: {winrate:.2f}%"
+
 # ================= LOOP =================
 bot = Bot()
 
 while True:
     try:
-        df = indicadores(obtener_velas())
+        df_raw = obtener_velas()
+        df, slope, intercept = indicadores(df_raw)
+
+        soporte, resistencia = soportes_resistencias(df)
+
         price = df['close'].iloc[-1]
 
-        # gráfico simple
+        # gráfico
         fig = plt.figure()
         plt.plot(df['close'])
+        plt.axhline(soporte)
+        plt.axhline(resistencia)
         buf = io.BytesIO()
         plt.savefig(buf, format='png')
         img_b64 = base64.b64encode(buf.getvalue()).decode()
 
-        decision, data = analizar_con_groq(df, img_b64)
+        decision, data = analizar_con_groq(df, img_b64, soporte, resistencia, slope)
+
+        print("="*80)
+        print(datetime.now())
+        print("Precio:", price)
+        print("Tendencia slope:", slope)
+        print("Soporte:", soporte, "Resistencia:", resistencia)
+        print("IA:", data)
 
         if bot.pos is None and decision in ["BUY","SELL"]:
-            bot.abrir(decision, price, df['atr'].iloc[-1], data.get("trailing","NORMAL"))
-            print("ENTRADA:", decision, data)
+            bot.abrir(decision, price, data.get("sl",price), data.get("tp1",price))
+            print("ENTRADA:", decision)
 
-        bot.gestionar(price, df['atr'].iloc[-1])
+        bot.gestionar(price)
+
+        print(bot.stats())
+        print("="*80)
 
         time.sleep(SLEEP_SECONDS)
 

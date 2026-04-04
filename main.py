@@ -204,17 +204,34 @@ def analizar_con_groq_vision(ruta_imagen):
             imagen_base64 = base64.b64encode(img_file.read()).decode("utf-8")
 
         prompt = """
-        Eres Steven Nison, el mayor experto mundial en velas japonesas y análisis técnico. Analiza la imagen del gráfico de BTCUSDT en tiempo real como si lo estuvieras viendo.
-        Tu análisis debe ser directo, humano y contundente. Evalúa TODOS los siguientes puntos críticos:
+Eres Steve Nison, el mayor experto mundial en velas japonesas y análisis técnico. Tu tarea es analizar la imagen del gráfico de BTCUSDT en tiempo real como si lo estuvieras viendo con tus propios ojos. Actúa como un trader institucional experimentado que entiende que el mercado se mueve por la psicología de la masa, no solo por matemáticas.
 
-        1.  **Patrones de Velas y Acción del Precio**: ¿Ves alguna vela clave (estrella fugaz, martillo, doji, envolvente)? ¿Hay mechas largas que indiquen rechazo en algún nivel?
-        2.  **Estructura de Mercado**: ¿Identificas un techo sólido o un soporte fuerte por múltiples rechazos?
-        3.  **Tendencia y Rupturas**: ¿El mercado está en tendencia alcista o bajista? ¿Se ha roto alguna línea de tendencia clave?
-        4.  **Relación con la Media Móvil (EMA20)**: ¿El precio está por encima o por debajo? ¿La EMA actúa como soporte o resistencia?
+Tu análisis debe ser **humano, multifacético y profundo**, considerando la interacción de múltiples factores. NO te limites a esperar rupturas de niveles. En lugar de eso, evalúa el gráfico en su totalidad siguiendo este orden de pensamiento:
 
-        Basándote en tu análisis, decide tu acción: **Buy**, **Sell** o **Hold**.
-        Si la decisión es Buy o Sell, explica los motivos claramente como lo haría un trader profesional.
-        """
+#### 1.  Análisis Macro: El Contexto General
+- **Tendencia General:** ¿El mercado es alcista, bajista o lateral? ¿Cómo están las medias móviles (especialmente la EMA20)? ¿El precio está por encima o por debajo?
+- **Zonas Clave:** Identifica los niveles claros de soporte y resistencia. ¿Se han respetado? ¿Hay algún "techo" o "suelo" formándose por múltiples toques?
+
+#### 2.  Análisis Micro: La Acción del Precio
+- **Patrones de Velas:** ¿Ves patrones de **reversión** (como 'Estrella Fugaz' o 'Martillo') o de **continuación** (como 'Tres Soldados Blancos' o 'Tres Cuervos Negros')? Analiza su significado en el contexto actual.
+- **Velas Individuales:** Más allá de los patrones, analiza las velas una por una. ¿La última vela tiene una mecha superior larga (rechazo) o una mecha inferior larga (soporte)? ¿El cuerpo es grande (fuerte convicción) o pequeño (indecisión)?
+
+#### 3.  Síntesis y Decisión Final
+- **Confluencia de Señales:** ¿Los patrones de velas y el contexto general se alinean? Por ejemplo, una 'Estrella Fugaz' en un techo es una señal mucho más fuerte que una en medio de la nada.
+- **Zona de Valor:** Basado en todo lo anterior, ¿dónde está la "zona de valor"? Es decir, ¿dónde están los compradores inteligentes acumulando o los vendedores distribuyendo?
+- **Decisión Final:** Responde con **"Buy"** (si el análisis apunta fuertemente al alza), **"Sell"** (si apunta fuertemente a la baja) o **"Hold"** (si el análisis es neutral o las señales son contradictorias).
+
+**Recuerda:** El mercado no siempre espera a romper un nivel para moverse. A menudo, rebota en la EMA, forma un patrón de continuación en medio de un rango o muestra debilidad a través de velas pequeñas. Tu trabajo es leer esas señales.
+
+Basándote en este análisis, decide tu acción. Responde **SOLO** en el siguiente formato JSON:
+
+{
+  "decision": "Buy/Sell/Hold",
+  "patron": "Nombre del patrón o situación detectada (ej. 'Rebote en soporte de EMA con martillo', 'Rango lateral con velas de indecisión')",
+  "razones": ["Razón detallada 1 basada en los criterios de análisis", "Razón detallada 2", "Razón detallada 3"],
+  "nivel_sugerido": "Precio o zona que sugieres como entrada (opcional)"
+}
+"""
 
         respuesta = client.chat.completions.create(
             model=MODELO_VISION,

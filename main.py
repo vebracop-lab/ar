@@ -1,7 +1,7 @@
-# BOT TRADING V97.0 BYBIT REAL – GEMINI IA (RAILWAY READY)
+# BOT TRADING V97.0 BYBIT REAL – GROQ IA (RAILWAY READY)
 # ======================================================
-# ⚠️ IA GEMINI INTEGRADA: Toma de decisiones basada en 
-# análisis visual del gráfico y datos de contexto.
+# ⚠️ IA GROQ (LLaMA 3.2 Vision) INTEGRADA: Toma de 
+# decisiones basada en análisis visual y contexto.
 # Diseñado para FUTUROS PERPETUOS BTCUSDT en Bybit (5m)
 # ======================================================
 
@@ -12,6 +12,7 @@ import hmac
 import hashlib
 import requests
 import json
+import base64
 import numpy as np
 import pandas as pd
 from scipy.stats import linregress
@@ -24,16 +25,16 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 # ======================================================
-# CONFIGURACIÓN GEMINI API
+# CONFIGURACIÓN GROQ API
 # ======================================================
-import google.generativeai as genai
+from groq import Groq
 
 # Railway inyectará la API KEY desde sus Variables de Entorno
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-genai.configure(api_key=GEMINI_API_KEY)
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+client = Groq(api_key=GROQ_API_KEY)
 
-# Usamos el modelo 1.5 Flash (Rápido, económico y con excelente visión)
-modelo_gemini = genai.GenerativeModel('gemini-1.5-flash')
+# Usaremos el modelo Vision de Llama 3.2 en Groq
+MODELO_GROQ = "llama-3.2-11b-vision-preview"
 
 plt.rcParams['figure.figsize'] = (12, 6)
 
@@ -153,9 +154,7 @@ def calcular_indicadores(df):
     rs = avg_gain / avg_loss
     df['rsi'] = 100 - (100 / (1 + rs))
 
-    # Toques a la EMA 20 (Rechazos)
     df['ema_touch'] = (df['low'] <= df['ema20']) & (df['high'] >= df['ema20'])
-
     return df.dropna()
 
 def detectar_zonas_mercado(df, idx=-2, ventana_macro=120):
@@ -177,16 +176,14 @@ def detectar_zonas_mercado(df, idx=-2, ventana_macro=120):
     else: tendencia_macro = 'LATERAL'
         
     linea_central = intercept + slope * x_macro
-    residuos = y_macro - linea_central
-    desviacion = np.std(residuos)
-    
+    desviacion = np.std(y_macro - linea_central)
     canal_sup = linea_central[-1] + (desviacion * 1.5)
     canal_inf = linea_central[-1] - (desviacion * 1.5)
     
     return soporte_horiz, resistencia_horiz, canal_sup, canal_inf, slope, intercept, tendencia_macro
 
 # ======================================================
-# GRÁFICA PARA GEMINI IA (SIN FLECHAS)
+# GRÁFICA PARA GROQ IA (SIN FLECHAS) Y BASE64
 # ======================================================
 def generar_imagen_para_ia(df, soporte, resistencia, slope, intercept):
     df_plot = df.copy().tail(GRAFICO_VELAS_LIMIT)
@@ -217,14 +214,17 @@ def generar_imagen_para_ia(df, soporte, resistencia, slope, intercept):
     buf = io.BytesIO()
     plt.savefig(buf, format='png', facecolor='black', bbox_inches='tight')
     plt.close(fig)
-    buf.seek(0)
     
-    return Image.open(buf)
+    # Para Groq, necesitamos la imagen en base64
+    base64_image = base64.b64encode(buf.getvalue()).decode('utf-8')
+    buf.close()
+    
+    return base64_image
 
 # ======================================================
-# MOTOR IA GEMINI (ANÁLISIS TÉCNICO Y VISUAL)
+# MOTOR IA GROQ (ANÁLISIS TÉCNICO Y VISUAL)
 # ======================================================
-def analizar_con_gemini(df, imagen, soporte, resistencia, tendencia, idx=-2):
+def analizar_con_groq(df, base64_image, soporte, resistencia, tendencia, idx=-2):
     precio_actual = df['close'].iloc[idx]
     rsi_actual = df['rsi'].iloc[idx]
     ema_actual = df['ema20'].iloc[idx]
@@ -234,7 +234,7 @@ def analizar_con_gemini(df, imagen, soporte, resistencia, tendencia, idx=-2):
     texto_velas = ultimas_velas.to_string()
 
     prompt = f"""
-Eres un Master Trader Institucional. Analiza la imagen del gráfico de 5 minutos proporcionada y los siguientes datos técnicos exactos.
+Eres un Master Trader Institucional. Analiza la imagen del gráfico de 5 minutos proporcionada y los datos técnicos.
 
 DATOS DE CONTEXTO:
 - Activo: BTCUSDT (5 Minutos)
@@ -244,39 +244,49 @@ DATOS DE CONTEXTO:
 - Tendencia Macro: {tendencia}
 - RSI (14): {rsi_actual:.2f}
 - EMA 20: {ema_actual:.2f}
-- Veces que el precio ha tocado/rechazado la EMA 20 en la última hora: {toques_ema}
+- Rechazos de EMA 20 reciente: {toques_ema}
 
-DATOS DE LAS ÚLTIMAS 5 VELAS (OHLC):
+VELAS RECIENTES:
 {texto_velas}
 
 INSTRUCCIONES:
-1. Analiza espacialmente la imagen: observa si el precio interactúa con la EMA 20 (amarilla), soporte (cyan) o resistencia (magenta).
-2. Lee los datos de las últimas 5 velas para confirmar patrones visuales.
-3. Evalúa si el RSI indica sobrecompra/sobreventa.
-4. Decide si hay una oportunidad de alta probabilidad para entrar en 'Buy', 'Sell', o si es mejor quedarse al margen ('Hold'). Sé conservador.
+1. Analiza espacialmente la imagen adjunta.
+2. Decide si hay una oportunidad de alta probabilidad para 'Buy', 'Sell', o 'Hold'. Sé conservador.
 
-RESPONDE EXCLUSIVAMENTE EN ESTE FORMATO JSON:
+Devuelve tu respuesta en este formato JSON exacto:
 {{
-  "decision": "Buy" | "Sell" | "Hold",
-  "patron_detectado": "Nombre del patrón visual que identificaste",
-  "razones": [
-    "Razon 1",
-    "Razon 2",
-    "Razon 3"
-  ]
+  "decision": "Buy" o "Sell" o "Hold",
+  "patron_detectado": "Nombre del patron",
+  "razones": ["Razon 1", "Razon 2"]
 }}
 """
     try:
-        # AQUÍ OBLIGAMOS A GEMINI A RESPONDER EN JSON
-        response = modelo_gemini.generate_content(
-            [prompt, imagen],
-            generation_config={"response_mime_type": "application/json"}
+        completion = client.chat.completions.create(
+            model=MODELO_GROQ,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{base64_image}"}
+                        }
+                    ]
+                }
+            ],
+            # Forzamos JSON mode en Groq
+            response_format={"type": "json_object"},
+            temperature=0.2
         )
-        datos_ia = json.loads(response.text.strip())
+        
+        respuesta_texto = completion.choices[0].message.content
+        datos_ia = json.loads(respuesta_texto.strip())
         return datos_ia
+        
     except Exception as e:
-        print(f"🚨 Error procesando Gemini: {e}")
-        return {"decision": "Hold", "patron_detectado": "Error API", "razones": ["Error de conexión con Gemini"]}
+        print(f"🚨 Error procesando Groq: {e}")
+        return {"decision": "Hold", "patron_detectado": "Error API", "razones": ["Error de conexión con Groq"]}
 
 # ======================================================
 # GRÁFICA FINAL PARA TELEGRAM (CON FLECHA)
@@ -308,11 +318,11 @@ def generar_grafico_telegram(df, decision, soporte, resistencia, razones, patron
         ax.scatter(entrada_x_idx, closes[-2]+50, s=300, marker='v', color='red', edgecolors='black', zorder=5)
 
     texto_razones = "\n".join(razones)
-    texto_panel = f"GEMINI IA: {decision.upper()}\nPatrón: {patron}\nPrecio: {df['close'].iloc[-1]:.2f}\n\nRazonamiento IA:\n{texto_razones}"
+    texto_panel = f"GROQ IA: {decision.upper()}\nPatrón: {patron}\nPrecio: {df['close'].iloc[-1]:.2f}\n\nRazonamiento IA:\n{texto_razones}"
     
     ax.text(0.02, 0.98, texto_panel, transform=ax.transAxes, fontsize=10, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.85))
 
-    ax.set_title(f"BOT V97.0 - Decisión IA GEMINI (5m)")
+    ax.set_title(f"BOT V97.0 - Decisión IA GROQ VISION (5m)")
     ax.grid(True, alpha=0.2)
     plt.legend(loc="lower right")
     plt.tight_layout()
@@ -437,8 +447,8 @@ def paper_revisar_sl_tp(df):
 # LOOP PRINCIPAL
 # ======================================================
 def run_bot():
-    print("🤖 BOT V97.0 INICIADO: Iniciando conexión con Railway...")
-    telegram_mensaje("🤖 BOT V97.0 INICIADO: Análisis IA GEMINI Multimodal en vivo desde Railway.")
+    print("🤖 BOT V97.0 INICIADO: Iniciando conexión con Railway (GROQ VISION)...")
+    telegram_mensaje("🤖 BOT V97.0 INICIADO: Análisis IA GROQ LLaMA 3.2 Vision en vivo desde Railway.")
     ultima_vela_operada = None
 
     while True:
@@ -451,10 +461,13 @@ def run_bot():
             soporte_horiz, resistencia_horiz, canal_sup, canal_inf, slope, intercept, tendencia = detectar_zonas_mercado(df, idx_eval)
             
             if PAPER_POSICION_ACTIVA is None and ultima_vela_operada != tiempo_vela_cerrada:
-                print(f"[{datetime.now(timezone.utc)}] Consultando a Gemini IA...")
+                print(f"[{datetime.now(timezone.utc)}] Consultando a Groq IA...")
                 
-                imagen_ia = generar_imagen_para_ia(df, soporte_horiz, resistencia_horiz, slope, intercept)
-                respuesta_ia = analizar_con_gemini(df, imagen_ia, soporte_horiz, resistencia_horiz, tendencia, idx_eval)
+                # Obtenemos la imagen en Base64 para LLaMA Vision
+                imagen_base64 = generar_imagen_para_ia(df, soporte_horiz, resistencia_horiz, slope, intercept)
+                
+                # Consultamos a GROQ
+                respuesta_ia = analizar_con_groq(df, imagen_base64, soporte_horiz, resistencia_horiz, tendencia, idx_eval)
                 
                 decision = respuesta_ia.get("decision", "Hold")
                 razones = respuesta_ia.get("razones", [])
@@ -477,7 +490,6 @@ def run_bot():
             if PAPER_POSICION_ACTIVA is not None:
                 paper_revisar_sl_tp(df)
 
-            # Esperar antes del siguiente ciclo
             time.sleep(SLEEP_SECONDS) 
 
         except Exception as e:

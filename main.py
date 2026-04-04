@@ -1,4 +1,4 @@
-# BOT TRADING V98.0 BYBIT REAL – GROQ IA (RAILWAY READY)
+# BOT TRADING V98.1 BYBIT REAL – GROQ IA (RAILWAY READY)
 # ======================================================
 # ⚠️ IA GROQ (LLaMA 3.3 Versatile): Toma de 
 # decisiones basada en análisis de contexto textual detallado.
@@ -15,6 +15,7 @@ import json
 import base64
 import numpy as np
 import pandas as pd
+import textwrap  # NUEVO: Para envolver textos largos en los gráficos
 from scipy.stats import linregress
 from datetime import datetime, timezone
 from PIL import Image
@@ -281,18 +282,28 @@ def generar_grafico_telegram_entrada(df, decision, soporte, resistencia, slope, 
     else:
         ax.scatter(entrada_x_idx, closes[-2]+50, s=300, marker='v', color='red', edgecolors='black', zorder=5)
 
+    # FORMATEO DE TEXTO (CORRECCIÓN TIGHT LAYOUT)
     texto_razones = "\n".join(razones)
-    texto_panel = f"GROQ IA: {decision.upper()}\nPatrón: {patron}\nPrecio Entrada: {df['close'].iloc[-1]:.2f}\n\nRazonamiento IA:\n{texto_razones}"
+    patron_formateado = textwrap.fill(patron, width=65)
+    razones_formateadas = textwrap.fill(texto_razones, width=65)
+    
+    texto_panel = f"GROQ IA: {decision.upper()}\nPatrón: {patron_formateado}\nPrecio Entrada: {df['close'].iloc[-1]:.2f}\n\nRazonamiento IA:\n{razones_formateadas}"
     
     ax.text(0.02, 0.98, texto_panel, transform=ax.transAxes, fontsize=10, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='black', edgecolor='white', alpha=0.85, label='white'))
 
-    ax.set_title(f"BOT V98.0 - ENTRADA AL MERCADO (5m)", color='white')
+    ax.set_title(f"BOT V98.1 - ENTRADA AL MERCADO (5m)", color='white')
     ax.set_facecolor('black')
     fig.patch.set_facecolor('black')
     ax.tick_params(colors='white')
     ax.grid(True, alpha=0.2, color='gray')
     plt.legend(loc="lower right", facecolor='black', labelcolor='white')
-    plt.tight_layout()
+    
+    # Manejo de la advertencia de diseño
+    try:
+        plt.tight_layout()
+    except Exception:
+        pass
+        
     return fig
 
 def generar_grafico_telegram_salida(df, posicion, precio_entrada, precio_salida, pnl, win, soporte, resistencia, slope, intercept):
@@ -326,13 +337,18 @@ def generar_grafico_telegram_salida(df, posicion, precio_entrada, precio_salida,
     
     ax.text(0.02, 0.98, texto_panel, transform=ax.transAxes, fontsize=12, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='black', edgecolor='white', alpha=0.85))
 
-    ax.set_title(f"BOT V98.0 - SALIDA DEL MERCADO (5m)", color='white')
+    ax.set_title(f"BOT V98.1 - SALIDA DEL MERCADO (5m)", color='white')
     ax.set_facecolor('black')
     fig.patch.set_facecolor('black')
     ax.tick_params(colors='white')
     ax.grid(True, alpha=0.2, color='gray')
     plt.legend(loc="lower right", facecolor='black', labelcolor='white')
-    plt.tight_layout()
+    
+    try:
+        plt.tight_layout()
+    except Exception:
+        pass
+        
     return fig
 
 # ======================================================
@@ -464,8 +480,8 @@ def paper_revisar_sl_tp(df, soporte, resistencia, slope, intercept):
 # LOOP PRINCIPAL
 # ======================================================
 def run_bot():
-    print("🤖 BOT V98.0 INICIADO: LLaMA 3.3 70b Versatile - Análisis Contextual Completo...")
-    telegram_mensaje("🤖 BOT V98.0 INICIADO: Análisis IA GROQ Textual en vivo desde Railway.")
+    print("🤖 BOT V98.1 INICIADO: LLaMA 3.3 70b Versatile - Análisis Contextual Completo...")
+    telegram_mensaje("🤖 BOT V98.1 INICIADO: Análisis IA GROQ Textual en vivo desde Railway.")
     ultima_vela_operada = None
 
     while True:

@@ -1,11 +1,9 @@
-# BOT TRADING V99.1 BYBIT REAL – GROQ IA (RAILWAY READY)
+# BOT TRADING V99.2 BYBIT REAL – GROQ IA (RAILWAY READY)
 # ======================================================
-# IA GROQ (LLaMA 3.3 Versatile) con análisis contextual avanzado:
-# - Percepción de EMA como soporte/resistencia dinámico con múltiples toques
-# - MACD + RSI + Velas + Estructura de mercado
-# - Autoaprendizaje cada 10 trades (análisis de errores y ajuste de sesgo)
-# - Gestión de riesgos dinámica con SL, TP1 fijo, TP2 con trailing
-# - Corregido: no se queda en Hold por estar en EMA, usa todo el contexto
+# - Análisis avanzado de velas japonesas (estrella fugaz, martillo, etc.)
+# - Detección de techos/soportes por múltiples rechazos
+# - Prompt inspirado en Steven Nison (contexto visual enriquecido)
+# - Gestión de riesgos dinámica y autoaprendizaje
 # ======================================================
 
 import os
@@ -34,7 +32,7 @@ MODELO_GROQ = "llama-3.3-70b-versatile"
 
 SYMBOL = "BTCUSDT"
 INTERVAL = "5"
-RISK_PER_TRADE = 0.02        # 2% del balance por trade
+RISK_PER_TRADE = 0.02
 LEVERAGE = 10
 SLEEP_SECONDS = 60
 
@@ -47,7 +45,7 @@ PORCENTAJE_CIERRE_TP1 = 0.5
 GRAFICO_VELAS_LIMIT = 120
 
 # ======================================================
-# PAPER TRADING (SIMULADO)
+# PAPER TRADING
 # ======================================================
 PAPER_BALANCE_INICIAL = 100.0
 PAPER_BALANCE = PAPER_BALANCE_INICIAL
@@ -152,7 +150,6 @@ def calcular_indicadores(df):
     df['macd'] = exp1 - exp2
     df['signal'] = df['macd'].ewm(span=9, adjust=False).mean()
     df['macd_hist'] = df['macd'] - df['signal']
-    df['ema_touch'] = (df['low'] <= df['ema20']) & (df['high'] >= df['ema20'])
     return df.dropna()
 
 def detectar_zonas_mercado(df, idx=-2, ventana_macro=120):
@@ -171,134 +168,92 @@ def detectar_zonas_mercado(df, idx=-2, ventana_macro=120):
     return soporte_horiz, resistencia_horiz, slope, intercept, tendencia_macro
 
 # ======================================================
-# ANÁLISIS CONTEXTUAL MEJORADO (EMA como soporte/resistencia)
+# ANÁLISIS AVANZADO DE VELAS (patrones Nison)
 # ======================================================
-def analizar_ema_soporte_resistencia(df, idx=-2, toques_minimos=2):
-    """
-    Detecta si la EMA20 actúa como soporte (precio mayoritariamente encima y múltiples toques)
-    o resistencia (precio mayoritariamente debajo y múltiples toques).
-    Retorna: (rol, toques, lado_precio)
-    """
-    precio_actual = df['close'].iloc[idx]
-    ema_actual = df['ema20'].iloc[idx]
-    # Contar toques en las últimas 6 velas (incluyendo actual)
-    toques = 0
-    for i in range(max(0, idx-5), idx+1):
-        if df['low'].iloc[i] <= df['ema20'].iloc[i] <= df['high'].iloc[i]:
-            toques += 1
-    # Determinar si el precio ha estado mayoritariamente por encima o debajo
-    precios_encima = 0
-    precios_debajo = 0
-    for i in range(max(0, idx-5), idx+1):
-        if df['close'].iloc[i] > df['ema20'].iloc[i]:
-            precios_encima += 1
-        elif df['close'].iloc[i] < df['ema20'].iloc[i]:
-            precios_debajo += 1
-    if precios_encima > precios_debajo:
-        lado = "ENCIMA"
-    elif precios_debajo > precios_encima:
-        lado = "DEBAJO"
-    else:
-        lado = "NEUTRAL"
+def detectar_patron_vela(open_, high, low, close):
+    """Detecta patrones individuales de una vela"""
+    cuerpo = abs(close - open_)
+    rango = high - low
+    if rango == 0:
+        return "Vela indeterminada"
+    cuerpo_pct = cuerpo / rango * 100
+    mecha_sup = high - max(close, open_)
+    mecha_inf = min(close, open_) - low
+    mecha_sup_pct = mecha_sup / rango * 100
+    mecha_inf_pct = mecha_inf / rango * 100
     
-    if toques >= toques_minimos:
-        if lado == "ENCIMA":
-            rol = "SOPORTE_DINAMICO"
-        elif lado == "DEBAJO":
-            rol = "RESISTENCIA_DINAMICA"
-        else:
-            rol = "NEUTRAL"
-    else:
-        rol = "SIN_ROL_CLARO"
-    return rol, toques, lado
+    es_verde = close >= open_
+    
+    # Estrella fugaz / Martillo invertido
+    if mecha_sup_pct > 60 and cuerpo_pct < 30 and (mecha_inf_pct < 10):
+        return "ESTRELLA FUGAZ (reversión bajista)" if not es_verde else "MARTILLO INVERTIDO (posible rebote)"
+    # Martillo / Hombre colgado
+    if mecha_inf_pct > 60 and cuerpo_pct < 30 and (mecha_sup_pct < 10):
+        return "MARTILLO (reversión alcista)" if es_verde else "HOMBRE COLGADO (reversión bajista)"
+    # Vela doji
+    if cuerpo_pct < 10:
+        return "DOJI (indecisión)"
+    # Vela larga sin mechas (fuerte impulso)
+    if cuerpo_pct > 70 and mecha_sup_pct < 15 and mecha_inf_pct < 15:
+        return "VELA LARGA SIN MECHAS (impulso fuerte)"
+    # Rechazo con mecha superior larga
+    if mecha_sup_pct > 50 and cuerpo_pct < 50:
+        return "RECHAZO EN ZONA ALTA (mecha superior larga)"
+    # Rechazo con mecha inferior larga
+    if mecha_inf_pct > 50 and cuerpo_pct < 50:
+        return "REBOTE EN ZONA BAJA (mecha inferior larga)"
+    return f"Vela normal ({cuerpo_pct:.0f}% cuerpo, Msup {mecha_sup_pct:.0f}%, Minf {mecha_inf_pct:.0f}%)"
 
-def analizar_posicion_respecto_ema_mejorado(df, idx=-2):
-    """Versión mejorada para el prompt"""
-    precio = df['close'].iloc[idx]
-    ema = df['ema20'].iloc[idx]
-    diff_pct = (precio - ema) / ema * 100
-    rol, toques, lado = analizar_ema_soporte_resistencia(df, idx, toques_minimos=2)
-    
-    if abs(diff_pct) < 0.15:
-        pos_texto = "PRECIO JUSTO EN LA EMA20 (tocando exactamente)"
-    elif precio > ema:
-        pos_texto = f"PRECIO ENCIMA DE EMA20 (+{diff_pct:.2f}%)"
-    else:
-        pos_texto = f"PRECIO DEBAJO DE EMA20 ({diff_pct:.2f}%)"
-    
-    if rol == "SOPORTE_DINAMICO":
-        rol_texto = f"✅ EMA20 actúa como SOPORTE DINÁMICO ({toques} toques en últimas velas). Precio mayoritariamente encima."
-    elif rol == "RESISTENCIA_DINAMICA":
-        rol_texto = f"❌ EMA20 actúa como RESISTENCIA DINÁMICA ({toques} toques en últimas velas). Precio mayoritariamente debajo."
-    else:
-        rol_texto = f"⚠️ EMA20 sin rol claro ({toques} toques)."
-    
-    # Detectar cruce reciente
-    cruce = ""
-    if idx-1 >= 0:
-        precio_ant = df['close'].iloc[idx-1]
-        ema_ant = df['ema20'].iloc[idx-1]
-        if precio_ant <= ema_ant and precio > ema:
-            cruce = "¡CRUCE ALCISTA RECIENTE! Precio superó EMA20."
-        elif precio_ant >= ema_ant and precio < ema:
-            cruce = "¡CRUCE BAJISTA RECIENTE! Precio cayó debajo de EMA20."
-    return pos_texto, rol_texto, cruce, diff_pct, toques
-
-def analizar_velas_detallado(df, num_velas=7):
-    ultimas = df.iloc[-num_velas-1:-1]
+def analizar_velas_nison(df, num_velas=8):
+    """Genera descripción detallada de velas como lo haría Steven Nison"""
+    ultimas = df.iloc[-num_velas-1:-1]  # Velas cerradas
     analisis = []
     for i, (idx, vela) in enumerate(ultimas.iterrows()):
+        patron = detectar_patron_vela(vela['open'], vela['high'], vela['low'], vela['close'])
+        color = "VERDE" if vela['close'] >= vela['open'] else "ROJA"
         cuerpo = abs(vela['close'] - vela['open'])
         rango = vela['high'] - vela['low']
-        if rango > 0:
-            cuerpo_pct = (cuerpo / rango) * 100
-            mecha_sup_pct = ((vela['high'] - max(vela['close'], vela['open'])) / rango) * 100
-            mecha_inf_pct = ((min(vela['close'], vela['open']) - vela['low']) / rango) * 100
-        else:
-            cuerpo_pct = mecha_sup_pct = mecha_inf_pct = 0
-        color = "VERDE" if vela['close'] >= vela['open'] else "ROJA"
-        analisis.append(f"Vela{i+1}: {color} | Cuerpo:{cuerpo_pct:.0f}% | MechaSup:{mecha_sup_pct:.0f}% | MechaInf:{mecha_inf_pct:.0f}% | Cierre:{vela['close']:.2f}")
+        mecha_sup = vela['high'] - max(vela['close'], vela['open'])
+        mecha_inf = min(vela['close'], vela['open']) - vela['low']
+        analisis.append(f"Vela{i+1}: {color} | Rango:{rango:.2f} | Cuerpo:{cuerpo:.2f} | MechSup:{mecha_sup:.2f} | MechInf:{mecha_inf:.2f} | Patrón: {patron}")
     return "\n".join(analisis)
 
-def analizar_ema_cruce(df):
-    prev_c = df['close'].iloc[-3]; prev_e = df['ema20'].iloc[-3]
-    curr_c = df['close'].iloc[-2]; curr_e = df['ema20'].iloc[-2]
-    if prev_c > prev_e and curr_c < curr_e:
-        return "CRUCE BAJISTA (precio debajo EMA20)"
-    elif prev_c < prev_e and curr_c > curr_e:
-        return "CRUCE ALCISTA (precio encima EMA20)"
-    return f"Precio {'encima' if curr_c>curr_e else 'debajo'} EMA20 (dist:{abs(curr_c-curr_e):.1f})"
+def detectar_techos_soportes(df, resistencia, soporte, num_velas=20):
+    """Detecta si ha habido múltiples rechazos en una zona (techo o soporte)"""
+    df_cercano = df.iloc[-num_velas:]
+    toques_resistencia = 0
+    toques_soporte = 0
+    for idx, vela in df_cercano.iterrows():
+        if vela['high'] >= resistencia * 0.998:
+            toques_resistencia += 1
+        if vela['low'] <= soporte * 1.002:
+            toques_soporte += 1
+    texto = ""
+    if toques_resistencia >= 3:
+        texto += f"⚠️ ZONA DE RESISTENCIA ({resistencia:.0f}) RECHAZADA {toques_resistencia} VECES en últimas velas. Se ha formado un TECHO SÓLIDO. "
+    if toques_soporte >= 3:
+        texto += f"✅ ZONA DE SOPORTE ({soporte:.0f}) PROBADA {toques_soporte} VECES. Posible rebote. "
+    return texto, toques_resistencia, toques_soporte
 
-def analizar_rechazo_resistencia(df, resistencia):
-    for i in range(-4, 1):
-        high = df['high'].iloc[i]
-        if high >= resistencia * 0.998:
-            rango = df['high'].iloc[i] - df['low'].iloc[i]
-            mecha = high - max(df['close'].iloc[i], df['open'].iloc[i])
-            if rango > 0 and (mecha/rango) > 0.3:
-                return f"RECHAZO en resistencia ({resistencia:.0f}) con mecha superior del {(mecha/rango)*100:.0f}%"
-    return "Sin rechazo claro"
-
-def analizar_macd_rsi(df, idx=-2):
-    rsi = df['rsi'].iloc[idx]
-    macd = df['macd'].iloc[idx]
-    signal = df['signal'].iloc[idx]
-    hist = df['macd_hist'].iloc[idx]
-    if macd > signal and hist > 0:
-        tend_macd = "ALCISTA (MACD arriba de señal, histograma positivo)"
-    elif macd < signal and hist < 0:
-        tend_macd = "BAJISTA (MACD debajo de señal, histograma negativo)"
-    elif macd > signal and hist < 0:
-        tend_macd = "POSIBLE CRUCE ALCISTA (divergencia positiva)"
+def analizar_tendencia_velas(df, num_velas=6):
+    """Analiza la secuencia de velas para detectar fuerza o debilidad"""
+    ultimas = df.iloc[-num_velas-1:-1]
+    colores = []
+    cuerpos = []
+    for vela in ultimas.iterrows():
+        colores.append("VERDE" if vela[1]['close'] >= vela[1]['open'] else "ROJA")
+        cuerpos.append(abs(vela[1]['close'] - vela[1]['open']))
+    # Secuencia de colores
+    secuencia = " → ".join(colores[-5:])
+    # Cuerpos promedio
+    cuerpo_prom = np.mean(cuerpos[-3:])
+    if colores[-3:].count("VERDE") >= 2 and cuerpos[-1] > cuerpo_prom:
+        tend_texto = "Últimas velas muestran FUERZA ALCISTA (cuerpos verdes grandes)."
+    elif colores[-3:].count("ROJA") >= 2 and cuerpos[-1] > cuerpo_prom:
+        tend_texto = "Últimas velas muestran DEBILIDAD BAJISTA (cuerpos rojos grandes)."
     else:
-        tend_macd = "NEUTRAL o debilitamiento"
-    if rsi > 70:
-        rsi_estado = "SOBRECOMPRADO (sobre 70) - posible retroceso"
-    elif rsi < 30:
-        rsi_estado = "SOBREVENDIDO (bajo 30) - posible rebote"
-    else:
-        rsi_estado = f"NEUTRAL ({rsi:.1f})"
-    return rsi, rsi_estado, tend_macd, hist
+        tend_texto = "Sin impulso claro en las últimas velas."
+    return secuencia, tend_texto
 
 # ======================================================
 # AUTOAPRENDIZAJE
@@ -337,54 +292,83 @@ def aprender_de_trades():
     ULTIMO_APRENDIZAJE = len(TRADE_HISTORY)
 
 # ======================================================
-# IA GROQ CON PROMPT CORREGIDO (más agresivo y contextual)
+# IA GROQ CON PROMPT ESTILO STEVEN NISON
 # ======================================================
 def analizar_con_groq_texto(df, soporte, resistencia, tendencia, slope, intercept, idx=-2):
     precio = df['close'].iloc[idx]
     atr = df['atr'].iloc[idx]
-    pos_texto, rol_ema, cruce_ema, diff_ema, toques_ema = analizar_posicion_respecto_ema_mejorado(df, idx)
+    ema_val = df['ema20'].iloc[idx]
     rsi, rsi_estado, tend_macd, hist_macd = analizar_macd_rsi(df, idx)
-    analisis_velas = analizar_velas_detallado(df)
-    analisis_ema = analizar_ema_cruce(df)
-    analisis_rechazo = analizar_rechazo_resistencia(df, resistencia)
     
+    # Análisis de velas al estilo Nison
+    analisis_velas_nison = analizar_velas_nison(df, num_velas=8)
+    secuencia_velas, tendencia_velas = analizar_tendencia_velas(df)
+    texto_techos, toques_res, toques_sop = detectar_techos_soportes(df, resistencia, soporte)
+    
+    # Posición respecto a EMA
+    diff_ema_pct = (precio - ema_val) / ema_val * 100
+    if abs(diff_ema_pct) < 0.2:
+        pos_ema = "PRECIO JUSTO EN LA EMA20 (tocando exactamente)"
+    elif precio > ema_val:
+        pos_ema = f"PRECIO ENCIMA DE EMA20 (+{diff_ema_pct:.2f}%)"
+    else:
+        pos_ema = f"PRECIO DEBAJO DE EMA20 ({diff_ema_pct:.2f}%)"
+    
+    # Rol de la EMA basado en toques
+    toques_ema = sum(1 for i in range(max(0, idx-5), idx+1) if df['low'].iloc[i] <= df['ema20'].iloc[i] <= df['high'].iloc[i])
+    if toques_ema >= 2 and precio > ema_val:
+        rol_ema = "EMA20 actúa como SOPORTE DINÁMICO (múltiples toques desde arriba)"
+    elif toques_ema >= 2 and precio < ema_val:
+        rol_ema = "EMA20 actúa como RESISTENCIA DINÁMICA (múltiples toques desde abajo)"
+    else:
+        rol_ema = "EMA20 sin rol claro de soporte/resistencia"
+    
+    # Ruptura de tendencia?
+    ruptura = ""
+    if len(df) > 20:
+        pendiente_reciente, _, _, _, _ = linregress(np.arange(20), df['close'].iloc[-20:].values)
+        if slope > 0 and pendiente_reciente < 0:
+            ruptura = "⚠️ ¡RUPTURA DE TENDENCIA ALCISTA! La pendiente reciente es negativa mientras que la macro era alcista."
+        elif slope < 0 and pendiente_recente > 0:
+            ruptura = "✅ ¡RUPTURA DE TENDENCIA BAJISTA! La pendiente reciente es positiva."
+
     prompt = f"""
-Eres un trader institucional EXPERTO en BTCUSDT (5m). Analiza el gráfico como si lo vieras en tiempo real. NO te quedes en Hold por defecto. Si hay condiciones favorables (múltiples toques en EMA, MACD alineado, velas de impulso), DEBES tomar una decisión activa (Buy/Sell).
+Eres Steven Nison, el mayor experto mundial en velas japonesas. Analiza el gráfico de BTCUSDT en 5 minutos como si lo estuvieras viendo. Usa tu conocimiento profundo de la acción del precio, patrones de velas y estructura de mercado. Sé directo, humano y contundente. Si ves una señal de reversión clara, ACTÚA.
 
-CONTEXTO ACTUAL:
-- Precio: {precio:.2f}
-- ATR: {atr:.2f}
-- Soporte horizontal: {soporte:.2f}
-- Resistencia horizontal: {resistencia:.2f}
-- Tendencia macro (120 velas): {tendencia} (pendiente {slope:.6f})
-- RSI: {rsi:.1f} - {rsi_estado}
-- MACD: {tend_macd}, histograma: {hist_macd:.2f}
-- EMA20: {df['ema20'].iloc[idx]:.2f}
-- {pos_texto}
-- {rol_ema}
-- {cruce_ema}
-- {analisis_ema}
-- {analisis_rechazo}
+=== CONTEXTO ACTUAL ===
+Precio actual: {precio:.2f}
+ATR (volatilidad): {atr:.2f}
+Soporte horizontal: {soporte:.2f}
+Resistencia horizontal: {resistencia:.2f}
+Tendencia macro (120 velas): {tendencia} (pendiente {slope:.6f})
+{ruptura}
+RSI: {rsi:.1f} - {rsi_estado}
+MACD: {tend_macd} (histograma {hist_macd:.2f})
+EMA20: {ema_val:.2f} - {pos_ema} - {rol_ema}
+{texto_techos}
 
-VELAS RECIENTES (7 últimas):
-{analisis_velas}
+=== ANÁLISIS DE VELAS (estilo Nison) ===
+{analisis_velas_nison}
 
-REGLAS PARA DECIDIR (Sé humano y flexible):
-1. Si el precio está ENCIMA de la EMA20 y la EMA ha sido tocada al menos 2 veces (soporte dinámico) + MACD alcista + velas verdes → BUY.
-2. Si el precio está DEBAJO de la EMA20 y la EMA ha sido tocada al menos 2 veces (resistencia dinámica) + MACD bajista + velas rojas → SELL.
-3. Si el precio está JUSTO en la EMA20 (tocando), observa la vela actual: si es un martillo o vela de rechazo con mecha larga hacia un lado, actúa en contra de la mecha. Si hay cruce reciente, úsalo.
-4. Si hay divergencia entre MACD y precio (ej. precio hace nuevo mínimo pero MACD no), considera reversión.
-5. Si el RSI está sobrecomprado (>75) y el precio toca resistencia horizontal + EMA como resistencia → SELL. Si RSI sobrevendido (<25) y soporte + EMA como soporte → BUY.
-6. Si el mercado está lateral (rango estrecho) y no hay señales claras → Hold.
-7. No tengas miedo de operar. Si hay 2 o más factores a favor, entra.
+Secuencia de colores últimas 5 velas: {secuencia_velas}
+{ tendencia_velas }
 
-Recomienda multiplicadores SL/TP basados en ATR: SL 1.2-2.0x ATR, TP1 2.0-3.5x, TP2 3.0-5.0x, trailing 1.5-2.5x.
+=== INSTRUCCIONES PARA TU DECISIÓN ===
+1. **Mira la vela más reciente**: si tiene una mecha superior muy larga y golpeó la resistencia, es una ESTRELLA FUGAZ → SELL. Si tiene mecha inferior larga en soporte → BUY.
+2. **Si ha habido 3 o más rechazos en la resistencia** (techo sólido) y el precio está debajo de la EMA20 → SELL.
+3. **Si el precio rompió la línea de tendencia alcista** (pendiente reciente negativa) y las velas son rojas → SELL.
+4. **Si hay falta de seguimiento alcista** (velas pequeñas después de un intento de subida) → SELL.
+5. **Si la EMA20 está actuando como resistencia** (precio debajo, múltiples toques) y MACD bajista → SELL.
+6. **Si ves un martillo en soporte** o vela de rebote con mecha inferior larga → BUY.
+7. **No tengas miedo de vender** cuando el mercado muestre debilidad. Los patrones de reversión son poderosos.
 
-Responde SOLO en JSON:
+Recomienda multiplicadores SL/TP según la volatilidad (ATR). Sé conservador: SL 1.2-2.0x ATR, TP1 2.0-3.5x, TP2 3.0-5.0x, trailing 1.5-2.5x.
+
+Responde SOLO en JSON con este formato:
 {{
   "decision": "Buy/Sell/Hold",
-  "patron": "nombre del patrón (ej. 'Soporte EMA + MACD alcista', 'Rechazo resistencia + RSI sobrecomprado')",
-  "razones": ["razón1","razón2"],
+  "patron": "nombre del patrón detectado (ej. 'Estrella fugaz en resistencia', 'Triple techo + ruptura tendencia')",
+  "razones": ["razón1","razón2","razón3"],
   "sl_mult": 1.5,
   "tp1_mult": 2.5,
   "tp2_mult": 4.0,
@@ -411,19 +395,17 @@ Responde SOLO en JSON:
         trailing_mult = sanitize(datos.get("trailing_mult"), DEFAULT_TRAILING_MULT)
         
         if not isinstance(datos.get("razones"), list):
-            datos["razones"] = ["Análisis técnico"]
+            datos["razones"] = ["Análisis de velas"]
         if not isinstance(datos.get("patron"), str):
             datos["patron"] = "Patrón técnico"
         
-        # Sesgo adaptativo solo si es muy fuerte (>0.2) para no bloquear señales
+        # Sesgo adaptativo muy leve
         if ADAPTIVE_BIAS > 0.2 and datos.get("decision") == "Sell":
-            if np.random.random() < 0.3:
+            if np.random.random() < 0.2:
                 datos["decision"] = "Hold"
-                datos["razones"].append("Sesgo adaptativo anuló señal contraria (baja probabilidad)")
         elif ADAPTIVE_BIAS < -0.2 and datos.get("decision") == "Buy":
-            if np.random.random() < 0.3:
+            if np.random.random() < 0.2:
                 datos["decision"] = "Hold"
-                datos["razones"].append("Sesgo adaptativo anuló señal contraria (baja probabilidad)")
         
         datos["sl_mult"] = 0.6 * sl_mult + 0.4 * ADAPTIVE_SL_MULT
         datos["tp1_mult"] = 0.6 * tp1_mult + 0.4 * ADAPTIVE_TP1_MULT
@@ -436,7 +418,7 @@ Responde SOLO en JSON:
         return {"decision": "Hold", "razones": ["Error API"], "patron": "", "sl_mult": DEFAULT_SL_MULT, "tp1_mult": DEFAULT_TP1_MULT, "tp2_mult": DEFAULT_TP2_MULT, "trailing_mult": DEFAULT_TRAILING_MULT}
 
 # ======================================================
-# GESTIÓN DE RIESGO Y PAPER TRADING (sin cambios significativos)
+# GESTIÓN DE RIESGO Y PAPER TRADING (sin cambios, igual que antes)
 # ======================================================
 def risk_management_check():
     global PAPER_DAILY_START_BALANCE, PAPER_STOPPED_TODAY, PAPER_CURRENT_DAY, PAPER_BALANCE
@@ -615,7 +597,7 @@ def generar_grafico_entrada(df, decision, soporte, resistencia, slope, intercept
         ax.scatter(entrada_x, df_plot['close'].iloc[-2]-50, s=300, marker='^', c='lime', edgecolors='black')
     else:
         ax.scatter(entrada_x, df_plot['close'].iloc[-2]+50, s=300, marker='v', c='red', edgecolors='black')
-    texto = f"GROQ V99.1: {decision.upper()}\nPatrón: {patron[:60]}\n{chr(10).join(razones[:2])}"
+    texto = f"GROQ V99.2 (Nison): {decision.upper()}\nPatrón: {patron[:60]}\n{chr(10).join(razones[:2])}"
     ax.text(0.02, 0.98, texto, transform=ax.transAxes, fontsize=10, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='black', alpha=0.85))
     ax.set_facecolor('black'); fig.patch.set_facecolor('black'); ax.tick_params(colors='white')
     ax.grid(True, alpha=0.2)
@@ -653,8 +635,8 @@ def generar_grafico_salida(df, posicion, precio_entrada, precio_salida, pnl, win
 # LOOP PRINCIPAL
 # ======================================================
 def run_bot():
-    print("🤖 BOT V99.1 INICIADO - IA mejorada: EMA como soporte/resistencia con toques, menos Hold")
-    telegram_mensaje("🤖 BOT V99.1: Análisis humano mejorado, entradas activas cuando hay condiciones.")
+    print("🤖 BOT V99.2 INICIADO - Análisis de velas estilo Steven Nison, detección de techos/soportes")
+    telegram_mensaje("🤖 BOT V99.2: Incorpora patrones de velas, rechazos múltiples y ruptura de tendencia.")
     ultima_vela_operada = None
 
     while True:

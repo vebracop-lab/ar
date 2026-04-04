@@ -1,223 +1,274 @@
-
-# BOT TRADING V105.0 - IA FULL + LOG PRO + SIN ATR + SIN PATRONES
-# ================================================================
-# ✔ IA decide TODO (Groq)
-# ✔ EMA20 / EMA50
-# ✔ Soportes / Resistencias
-# ✔ Tendencia con slope
-# ✔ Gráfico profesional
-# ✔ Logs completos + estadísticas
-# ✔ TP1 fijo + TP2 trailing SIN ATR
-
 import os
 import time
-import io
-import base64
 import json
-import re
 import requests
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from datetime import datetime
 from groq import Groq
 from scipy.stats import linregress
 
-# ================= CONFIG =================
+# ==========================
+# CONFIG
+# ==========================
 SYMBOL = "BTCUSDT"
 INTERVAL = "5"
 SLEEP_SECONDS = 60
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-client_groq = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+client = Groq(api_key=GROQ_API_KEY)
 
-# ================= DATA =================
+# ==========================
+# DATA
+# ==========================
 def obtener_velas():
     url = "https://api.bybit.com/v5/market/kline"
-    params = {"category":"linear","symbol":SYMBOL,"interval":INTERVAL,"limit":200}
-    data = requests.get(url, params=params).json()["result"]["list"][::-1]
+    params = {
+        "category": "linear",
+        "symbol": SYMBOL,
+        "interval": INTERVAL,
+        "limit": 200
+    }
 
-    df = pd.DataFrame(data, columns=['time','open','high','low','close','volume','turnover'])
+    r = requests.get(url, params=params)
+    data = r.json()
 
-    for col in ['open','high','low','close']:
-        df[col] = df[col].astype(float)
+    df = pd.DataFrame(
+        data["result"]["list"],
+        columns=['time','open','high','low','close','volume','turnover']
+    )
 
-    df['time'] = pd.to_datetime(df['time'].astype(np.int64), unit='ms')
-    df.set_index('time', inplace=True)
+    df = df.iloc[::-1]
+
+    df[['open','high','low','close','volume']] = df[
+        ['open','high','low','close','volume']
+    ].astype(float)
 
     return df
 
+# ==========================
+# INDICADORES
+# ==========================
 def indicadores(df):
     df['ema20'] = df['close'].ewm(span=20).mean()
-    df['ema50'] = df['close'].ewm(span=50).mean()
 
-    x = np.arange(len(df))
-    slope, intercept, _, _, _ = linregress(x, df['close'])
+    # RSI simplificado
+    delta = df['close'].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
 
-    df['trend'] = slope
-    return df.dropna(), slope, intercept
+    avg_gain = gain.rolling(14).mean()
+    avg_loss = loss.rolling(14).mean()
 
-# ================= SOPORTES =================
-def soportes_resistencias(df):
-    soporte = df['low'].rolling(20).min().iloc[-1]
-    resistencia = df['high'].rolling(20).max().iloc[-1]
+    rs = avg_gain / avg_loss
+    df['rsi'] = 100 - (100 / (1 + rs))
+
+    # ATR
+    df['atr'] = (df['high'] - df['low']).rolling(14).mean()
+
+    return df.dropna()
+
+# ==========================
+# SOPORTE / RESISTENCIA
+# ==========================
+def soporte_resistencia(df):
+    soporte = df['low'].rolling(40).min().iloc[-2]
+    resistencia = df['high'].rolling(40).max().iloc[-2]
     return soporte, resistencia
 
-# ================= IA =================
-def analizar_con_groq(df, img_b64, soporte, resistencia, slope):
-    if not client_groq:
-        return "WAIT", {}
+# ==========================
+# TENDENCIA
+# ==========================
+def tendencia(df):
+    y = df['close'].values[-100:]
+    x = np.arange(len(y))
 
-    precio = df['close'].iloc[-1]
-    ema20 = df['ema20'].iloc[-1]
-    ema50 = df['ema50'].iloc[-1]
+    slope, _, _, _, _ = linregress(x, y)
 
-    prompt = f"""
-    Eres un trader institucional.
+    if slope > 0:
+        t = "alcista"
+    elif slope < 0:
+        t = "bajista"
+    else:
+        t = "lateral"
 
-    Datos:
-    Precio: {precio}
-    EMA20: {ema20}
-    EMA50: {ema50}
-    Soporte: {soporte}
-    Resistencia: {resistencia}
-    Pendiente tendencia: {slope}
+    return t, slope
 
-    Analiza TODO el gráfico.
+# ==========================
+# RECHAZOS
+# ==========================
+def contar_rechazos(df, nivel, tolerancia):
+    rechazos = 0
 
-    Devuelve JSON:
-    {{
-      "decision":"BUY|SELL|WAIT",
-      "confidence":0-100,
-      "sl":precio,
-      "tp1":precio,
-      "razon":"explicacion"
-    }}
-    """
+    for i in range(-15, -1):
+        high = df['high'].iloc[i]
+        low = df['low'].iloc[i]
 
+        if abs(high - nivel) <= tolerancia or abs(low - nivel) <= tolerancia:
+            rechazos += 1
+
+    return rechazos
+
+# ==========================
+# PROMPT IA
+# ==========================
+def construir_prompt(ctx):
+    return f"""
+Eres un trader institucional experto en scalping en 5 minutos.
+
+Devuelve SOLO JSON:
+
+{{
+"decision":"BUY|SELL|NO_TRADE",
+"confidence":0-1,
+"entry":0,
+"sl":0,
+"tp1":0,
+"tp2":0,
+"reason":""
+}}
+
+Contexto:
+
+Precio actual: {ctx['precio']}
+
+Tendencia:
+- Tipo: {ctx['tendencia']}
+- Fuerza: {ctx['slope']}
+
+Soporte: {ctx['soporte']}
+Resistencia: {ctx['resistencia']}
+
+Rechazos:
+- Soporte: {ctx['r_soporte']}
+- Resistencia: {ctx['r_resistencia']}
+- EMA20: {ctx['r_ema']}
+
+Indicadores:
+- EMA20: {ctx['ema']}
+- RSI: {ctx['rsi']}
+- ATR: {ctx['atr']}
+
+Reglas:
+
+- TP1 corto (1:1 aprox)
+- TP2 libre (dejar correr tendencia)
+- SL lógico (estructura)
+- Si no hay claridad: NO_TRADE
+"""
+
+# ==========================
+# LLAMADA IA
+# ==========================
+def decision_ia(prompt):
     try:
-        res = client_groq.chat.completions.create(
-            model="llama-3.2-11b-vision-preview",
-            messages=[{
-                "role":"user",
-                "content":[
-                    {"type":"text","text":prompt},
-                    {"type":"image_url","image_url":{"url":f"data:image/png;base64,{img_b64}"}}
-                ]
-            }]
+        r = client.chat.completions.create(
+            messages=[{"role": "user", "content": prompt}],
+            model="llama3-70b-8192"
         )
 
-        txt = res.choices[0].message.content
-        data = json.loads(re.search(r'\{.*\}', txt, re.S).group())
+        respuesta = r.choices[0].message.content
 
-        return data["decision"], data
+        data = json.loads(respuesta)
+
+        return data
 
     except Exception as e:
-        return "WAIT", {"error":str(e)}
+        print("❌ ERROR IA:", e)
+        return None
 
-# ================= BOT =================
-class Bot:
-    def __init__(self):
-        self.pos = None
-        self.entry = None
-        self.sl = None
-        self.tp1 = None
-        self.partial = False
-        self.balance = 100
-        self.trades = 0
-        self.wins = 0
+# ==========================
+# ESTADO
+# ==========================
+posicion = None
+entry = 0
+sl = 0
+tp1 = 0
+tp1_hit = False
 
-    def abrir(self, side, price, sl, tp1):
-        self.pos = side
-        self.entry = price
-        self.sl = sl
-        self.tp1 = tp1
-        self.partial = False
-
-    def gestionar(self, price):
-        if not self.pos:
-            return
-
-        if not self.partial:
-            if (self.pos=="BUY" and price>=self.tp1) or (self.pos=="SELL" and price<=self.tp1):
-                self.partial = True
-                self.sl = self.entry
-                print("TP1 alcanzado")
-
-        if self.partial:
-            profit = abs(price - self.entry)
-            if self.pos == "BUY":
-                new_sl = price - profit*0.3
-                if new_sl > self.sl:
-                    self.sl = new_sl
-            else:
-                new_sl = price + profit*0.3
-                if new_sl < self.sl:
-                    self.sl = new_sl
-
-        if (self.pos=="BUY" and price<=self.sl) or (self.pos=="SELL" and price>=self.sl):
-            self.trades += 1
-            if (self.pos=="BUY" and price>self.entry) or (self.pos=="SELL" and price<self.entry):
-                self.wins += 1
-                self.balance += 1
-            else:
-                self.balance -= 1
-
-            print("Cierre trade")
-            self.reset()
-
-    def reset(self):
-        self.pos = None
-        self.entry = None
-        self.sl = None
-        self.tp1 = None
-        self.partial = False
-
-    def stats(self):
-        winrate = (self.wins/self.trades*100) if self.trades>0 else 0
-        return f"Balance: {self.balance} | Trades: {self.trades} | Winrate: {winrate:.2f}%"
-
-# ================= LOOP =================
-bot = Bot()
-
+# ==========================
+# LOOP PRINCIPAL
+# ==========================
 while True:
     try:
-        df_raw = obtener_velas()
-        df, slope, intercept = indicadores(df_raw)
+        df = obtener_velas()
+        df = indicadores(df)
 
-        soporte, resistencia = soportes_resistencias(df)
+        precio = df['close'].iloc[-1]
 
-        price = df['close'].iloc[-1]
+        soporte, resistencia = soporte_resistencia(df)
+        tend, slope = tendencia(df)
 
-        # gráfico
-        fig = plt.figure()
-        plt.plot(df['close'])
-        plt.axhline(soporte)
-        plt.axhline(resistencia)
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        img_b64 = base64.b64encode(buf.getvalue()).decode()
+        ctx = {
+            "precio": precio,
+            "tendencia": tend,
+            "slope": slope,
+            "soporte": soporte,
+            "resistencia": resistencia,
+            "ema": df['ema20'].iloc[-1],
+            "rsi": df['rsi'].iloc[-1],
+            "atr": df['atr'].iloc[-1],
+            "r_soporte": contar_rechazos(df, soporte, 50),
+            "r_resistencia": contar_rechazos(df, resistencia, 50),
+            "r_ema": contar_rechazos(df, df['ema20'].iloc[-1], 50)
+        }
 
-        decision, data = analizar_con_groq(df, img_b64, soporte, resistencia, slope)
+        # ======================
+        # ENTRADA
+        # ======================
+        if posicion is None:
+            prompt = construir_prompt(ctx)
+            data = decision_ia(prompt)
 
-        print("="*80)
-        print(datetime.now())
-        print("Precio:", price)
-        print("Tendencia slope:", slope)
-        print("Soporte:", soporte, "Resistencia:", resistencia)
-        print("IA:", data)
+            if data:
+                decision = data["decision"]
+                confidence = data["confidence"]
 
-        if bot.pos is None and decision in ["BUY","SELL"]:
-            bot.abrir(decision, price, data.get("sl",price), data.get("tp1",price))
-            print("ENTRADA:", decision)
+                if decision != "NO_TRADE" and confidence >= 0.65:
+                    posicion = decision
+                    entry = data["entry"]
+                    sl = data["sl"]
+                    tp1 = data["tp1"]
+                    tp1_hit = False
 
-        bot.gestionar(price)
+                    print("\n🚀 NUEVA OPERACIÓN")
+                    print(data)
 
-        print(bot.stats())
-        print("="*80)
+        # ======================
+        # GESTIÓN
+        # ======================
+        else:
+
+            # TP1 (50%)
+            if not tp1_hit:
+                if (posicion == "BUY" and precio >= tp1) or \
+                   (posicion == "SELL" and precio <= tp1):
+
+                    tp1_hit = True
+                    sl = entry  # break even
+
+                    print("🎯 TP1 alcanzado → SL a BE")
+
+            # TRAILING INFINITO
+            if tp1_hit:
+                if posicion == "BUY":
+                    nuevo_sl = precio - (ctx["atr"] * 1.2)
+                    if nuevo_sl > sl:
+                        sl = nuevo_sl
+
+                elif posicion == "SELL":
+                    nuevo_sl = precio + (ctx["atr"] * 1.2)
+                    if nuevo_sl < sl:
+                        sl = nuevo_sl
+
+            # CIERRE
+            if (posicion == "BUY" and precio <= sl) or \
+               (posicion == "SELL" and precio >= sl):
+
+                print("📤 CIERRE POR SL / TRAILING")
+                posicion = None
 
         time.sleep(SLEEP_SECONDS)
 
     except Exception as e:
-        print("ERROR:", e)
-        time.sleep(10)
+        print("🚨 ERROR:", e)
+        time.sleep(60)

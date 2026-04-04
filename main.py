@@ -17,7 +17,7 @@ import pandas as pd
 import textwrap
 from scipy.stats import linregress
 from datetime import datetime, timezone
-from collections import deque
+from collections import Counter
 
 import matplotlib
 matplotlib.use('Agg')
@@ -87,6 +87,11 @@ ADAPTIVE_TP2_MULT = DEFAULT_TP2_MULT
 ADAPTIVE_TRAILING_MULT = DEFAULT_TRAILING_MULT
 TRADES_SIN_APRENDER = 0
 ULTIMO_APRENDIZAJE = None
+
+# Variables globales para guardar datos del último trade
+ULTIMA_RAZONES = []
+ULTIMO_PATRON = ""
+ULTIMOS_MULTIS = (DEFAULT_SL_MULT, DEFAULT_TP1_MULT, DEFAULT_TP2_MULT, DEFAULT_TRAILING_MULT)
 
 # ======================================================
 # CREDENCIALES Y TELEGRAM
@@ -181,7 +186,7 @@ def detectar_zonas_mercado(df, idx=-2, ventana_macro=120):
     return soporte_horiz, resistencia_horiz, slope, intercept, tendencia_macro
 
 # ======================================================
-# ANÁLISIS CONTEXTUAL ENRIQUECIDO (para que la IA "vea" la gráfica)
+# ANÁLISIS CONTEXTUAL ENRIQUECIDO
 # ======================================================
 def analizar_posicion_respecto_ema(df, idx=-2):
     """Describe si el precio está encima, debajo, tocando o cruzando la EMA20, y si la EMA actúa como soporte/resistencia."""
@@ -301,7 +306,6 @@ def aprender_de_trades():
     for loss in losses:
         razones_loss.extend(loss.get('razones_ia', []))
     # Contar frecuencias
-    from collections import Counter
     counter = Counter(razones_loss)
     errores_comunes = counter.most_common(3)
     
@@ -328,19 +332,17 @@ def aprender_de_trades():
     ULTIMO_APRENDIZAJE = len(TRADE_HISTORY)
 
 # ======================================================
-# IA GROQ CON ANÁLISIS VISUAL ENRIQUECIDO Y PARÁMETROS ADAPTATIVOS
+# IA GROQ CON ANÁLISIS VISUAL ENRIQUECIDO Y SANITIZACIÓN
 # ======================================================
 def analizar_con_groq_texto(df, soporte, resistencia, tendencia, slope, intercept, idx=-2):
     precio = df['close'].iloc[idx]
     atr = df['atr'].iloc[idx]
-    # Nuevos análisis
     relacion_ema, rol_ema, cruce_ema, diff_ema_pct = analizar_posicion_respecto_ema(df, idx)
     rsi, rsi_estado, tend_macd, hist_macd = analizar_macd_rsi(df, idx)
     analisis_velas = analizar_velas_detallado(df)
     analisis_ema = analizar_ema_cruce(df)
     analisis_rechazo = analizar_rechazo_resistencia(df, resistencia)
     
-    # Incorporar sesgo adaptativo al prompt
     sesgo_texto = ""
     if ADAPTIVE_BIAS > 0.05:
         sesgo_texto = f" (sesgo adaptativo actual hacia BUY: +{ADAPTIVE_BIAS:.2f})"
@@ -393,23 +395,40 @@ Si es Hold, los multiplicadores pueden ser nulos o por defecto.
             temperature=0.15
         )
         datos = json.loads(completion.choices[0].message.content)
-        # Aplicar sesgo adaptativo (si la IA dijo Buy y sesgo es negativo, reconsiderar? Mejor modificar decisión ligeramente)
+        
+        # ========== SANITIZACIÓN: reemplazar None por valores por defecto ==========
+        def sanitize(value, default):
+            if value is None or not isinstance(value, (int, float)):
+                return default
+            return value
+        
+        sl_mult_raw = datos.get("sl_mult", DEFAULT_SL_MULT)
+        tp1_mult_raw = datos.get("tp1_mult", DEFAULT_TP1_MULT)
+        tp2_mult_raw = datos.get("tp2_mult", DEFAULT_TP2_MULT)
+        trailing_mult_raw = datos.get("trailing_mult", DEFAULT_TRAILING_MULT)
+        
+        sl_mult = sanitize(sl_mult_raw, DEFAULT_SL_MULT)
+        tp1_mult = sanitize(tp1_mult_raw, DEFAULT_TP1_MULT)
+        tp2_mult = sanitize(tp2_mult_raw, DEFAULT_TP2_MULT)
+        trailing_mult = sanitize(trailing_mult_raw, DEFAULT_TRAILING_MULT)
+        
+        # Asegurar que razones y patron sean strings válidas
+        if not isinstance(datos.get("razones"), list):
+            datos["razones"] = ["Análisis no disponible"]
+        if not isinstance(datos.get("patron"), str):
+            datos["patron"] = "Patrón no especificado"
+        
+        # Aplicar sesgo adaptativo (si la IA dijo Buy y sesgo es negativo, reconsiderar)
         if ADAPTIVE_BIAS > 0.1 and datos.get("decision") == "Sell":
-            # Si tenemos sesgo fuerte a Buy y la IA dice Sell, pasar a Hold
             if np.random.random() < abs(ADAPTIVE_BIAS):
                 datos["decision"] = "Hold"
-                datos["razones"].append("Sesgo adaptativo anuló señal contraria")
+                datos["razones"] = datos.get("razones", []) + ["Sesgo adaptativo anuló señal contraria"]
         elif ADAPTIVE_BIAS < -0.1 and datos.get("decision") == "Buy":
             if np.random.random() < abs(ADAPTIVE_BIAS):
                 datos["decision"] = "Hold"
-                datos["razones"].append("Sesgo adaptativo anuló señal contraria")
+                datos["razones"] = datos.get("razones", []) + ["Sesgo adaptativo anuló señal contraria"]
         
-        # Usar multiplicadores adaptativos si la IA no los especifica o son extremos
-        sl_mult = datos.get("sl_mult", DEFAULT_SL_MULT)
-        tp1_mult = datos.get("tp1_mult", DEFAULT_TP1_MULT)
-        tp2_mult = datos.get("tp2_mult", DEFAULT_TP2_MULT)
-        trailing_mult = datos.get("trailing_mult", DEFAULT_TRAILING_MULT)
-        # Mezclar con adaptativos (media ponderada)
+        # Mezclar con adaptativos (media ponderada) - ahora seguros de que no son None
         datos["sl_mult"] = 0.7 * sl_mult + 0.3 * ADAPTIVE_SL_MULT
         datos["tp1_mult"] = 0.7 * tp1_mult + 0.3 * ADAPTIVE_TP1_MULT
         datos["tp2_mult"] = 0.7 * tp2_mult + 0.3 * ADAPTIVE_TP2_MULT
@@ -418,10 +437,10 @@ Si es Hold, los multiplicadores pueden ser nulos o por defecto.
         return datos
     except Exception as e:
         print(f"Error Groq: {e}")
-        return {"decision": "Hold", "razones": ["Error API"], "sl_mult": DEFAULT_SL_MULT, "tp1_mult": DEFAULT_TP1_MULT, "tp2_mult": DEFAULT_TP2_MULT, "trailing_mult": DEFAULT_TRAILING_MULT}
+        return {"decision": "Hold", "razones": ["Error API"], "patron": "", "sl_mult": DEFAULT_SL_MULT, "tp1_mult": DEFAULT_TP1_MULT, "tp2_mult": DEFAULT_TP2_MULT, "trailing_mult": DEFAULT_TRAILING_MULT}
 
 # ======================================================
-# GESTIÓN DE RIESGO Y PAPER TRADING (similar, pero guardando historial)
+# GESTIÓN DE RIESGO Y PAPER TRADING
 # ======================================================
 def risk_management_check():
     global PAPER_DAILY_START_BALANCE, PAPER_STOPPED_TODAY, PAPER_CURRENT_DAY, PAPER_BALANCE
@@ -441,6 +460,7 @@ def paper_abrir_posicion(decision, precio, atr, sl_mult, tp1_mult, tp2_mult, tra
     global PAPER_POSICION_ACTIVA, PAPER_PRECIO_ENTRADA, PAPER_SL_INICIAL, PAPER_TP1, PAPER_TP2
     global PAPER_TRAILING_MULT, PAPER_SIZE_BTC, PAPER_SIZE_BTC_RESTANTE, PAPER_TP1_EJECUTADO
     global PAPER_SL_ACTUAL, PAPER_BALANCE
+    global ULTIMA_RAZONES, ULTIMO_PATRON, ULTIMOS_MULTIS
 
     if PAPER_POSICION_ACTIVA is not None:
         return False
@@ -475,7 +495,6 @@ def paper_abrir_posicion(decision, precio, atr, sl_mult, tp1_mult, tp2_mult, tra
     PAPER_SL_ACTUAL = sl
 
     # Guardar razones para el historial
-    global ULTIMA_RAZONES, ULTIMO_PATRON, ULTIMOS_MULTIS
     ULTIMA_RAZONES = razones
     ULTIMO_PATRON = patron
     ULTIMOS_MULTIS = (sl_mult, tp1_mult, tp2_mult, trailing_mult)
@@ -488,6 +507,7 @@ def paper_revisar_sl_tp(df, soporte, resistencia, slope, intercept):
     global PAPER_TRAILING_MULT, PAPER_SIZE_BTC, PAPER_SIZE_BTC_RESTANTE, PAPER_TP1_EJECUTADO
     global PAPER_SL_ACTUAL, PAPER_BALANCE, PAPER_PNL_PARCIAL, PAPER_WIN, PAPER_LOSS
     global PAPER_TRADES_TOTALES, PAPER_LAST_10_PNL, TRADE_HISTORY
+    global ULTIMA_RAZONES, ULTIMO_PATRON, ULTIMOS_MULTIS
 
     if PAPER_POSICION_ACTIVA is None:
         return None
@@ -570,9 +590,6 @@ def paper_revisar_sl_tp(df, soporte, resistencia, slope, intercept):
                 "resultado_win": win_status
             }
             TRADE_HISTORY.append(trade_record)
-            # Llamar a aprendizaje cada 10 trades
-            global TRADES_SIN_APRENDER
-            TRADES_SIN_APRENDER += 1
             if len(TRADE_HISTORY) % 10 == 0:
                 aprender_de_trades()
         except Exception as e:
@@ -590,7 +607,7 @@ def paper_revisar_sl_tp(df, soporte, resistencia, slope, intercept):
     return None
 
 # ======================================================
-# GRÁFICOS (sin cambios significativos)
+# GRÁFICOS
 # ======================================================
 def generar_grafico_entrada(df, decision, soporte, resistencia, slope, intercept, razones, patron):
     df_plot = df.tail(GRAFICO_VELAS_LIMIT).copy()
@@ -653,10 +670,6 @@ def run_bot():
     print("🤖 BOT V99.0 INICIADO - IA con análisis contextual enriquecido y autoaprendizaje")
     telegram_mensaje("🤖 BOT V99.0 INICIADO: Análisis de EMA como soporte/resistencia, MACD + RSI + Autoaprendizaje cada 10 trades.")
     ultima_vela_operada = None
-    global ULTIMA_RAZONES, ULTIMO_PATRON, ULTIMOS_MULTIS
-    ULTIMA_RAZONES = []
-    ULTIMO_PATRON = ""
-    ULTIMOS_MULTIS = (DEFAULT_SL_MULT, DEFAULT_TP1_MULT, DEFAULT_TP2_MULT, DEFAULT_TRAILING_MULT)
 
     while True:
         try:

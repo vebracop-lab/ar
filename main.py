@@ -1,10 +1,9 @@
-# BOT TRADING V99.7 BYBIT REAL – GROQ IA VISION + AUTOAPRENDIZAJE
-# ================================================================
-# - IA multimodal (Llama 4 Scout) con prompt más decidido y rápido
-# - Autoaprendizaje cada 10 trades (sesgo, SL, TP1, trailing)
-# - Logs limpios (sin JSON crudo) en consola y Telegram
-# - TP1 ajustado para 5m (1.6x ATR), sin TP2 fijo, solo trailing
-# ================================================================
+# BOT TRADING V99.9 – GROQ VISION (PROMPT LIBRE, ESTILO NISON)
+# ============================================================
+# - Prompt minimalista: "Mira el gráfico y decide como Steven Nison"
+# - Sin instrucciones rígidas, la IA debe interpretar visualmente
+# - Logs limpios, respuesta JSON simple
+# ============================================================
 
 import os
 import time
@@ -36,7 +35,7 @@ SYMBOL = "BTCUSDT"
 INTERVAL = "5"
 RISK_PER_TRADE = 0.02
 LEVERAGE = 10
-SLEEP_SECONDS = 45          # Reducido para mayor frecuencia
+SLEEP_SECONDS = 45
 GRAFICO_VELAS_LIMIT = 120
 
 DEFAULT_SL_MULT = 1.5
@@ -45,7 +44,7 @@ DEFAULT_TRAILING_MULT = 1.8
 PORCENTAJE_CIERRE_TP1 = 0.5
 
 # ======================================================
-# PAPER TRADING (SIMULADO)
+# PAPER TRADING (SIMULADO) – mismo que antes
 # ======================================================
 PAPER_BALANCE_INICIAL = 100.0
 PAPER_BALANCE = PAPER_BALANCE_INICIAL
@@ -152,7 +151,7 @@ def detectar_zonas_mercado(df, idx=-2, ventana_macro=120):
     return soporte_horiz, resistencia_horiz, slope, intercept, tendencia_macro
 
 # ======================================================
-# AUTOAPRENDIZAJE
+# AUTOAPRENDIZAJE (igual)
 # ======================================================
 def aprender_de_trades():
     global ADAPTIVE_BIAS, ADAPTIVE_SL_MULT, ADAPTIVE_TP1_MULT, ADAPTIVE_TRAILING_MULT
@@ -196,15 +195,13 @@ def aprender_de_trades():
     ULTIMO_APRENDIZAJE = len(TRADE_HISTORY)
 
 # ======================================================
-# IA GROQ CON VISIÓN (PROMPT MÁS DECIDIDO)
+# IA GROQ CON PROMPT MINIMALISTA (ESTILO NISON)
 # ======================================================
 def limpiar_respuesta_json(texto):
-    """Elimina marcadores de código como ```json ... ``` y extrae el JSON puro."""
-    # Busca contenido entre triple backticks
+    """Extrae el JSON de la respuesta, eliminando marcadores."""
     match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', texto, re.DOTALL)
     if match:
         return match.group(1)
-    # Si no hay backticks, intenta encontrar un objeto JSON directamente
     match = re.search(r'\{.*\}', texto, re.DOTALL)
     if match:
         return match.group(0)
@@ -215,23 +212,19 @@ def analizar_con_groq_vision(ruta_imagen):
         with open(ruta_imagen, "rb") as img_file:
             imagen_base64 = base64.b64encode(img_file.read()).decode("utf-8")
 
+        # PROMPT LIBRE, SIN INSTRUCCIONES ESPECÍFICAS
         prompt = """
-Eres Steve Nison, el mayor experto en velas japonesas y análisis técnico. Actúa como un trader institucional que NO espera señales perfectas. El mercado rara vez es ideal; tu trabajo es tomar decisiones con la información disponible.
-
-REGLAS ESTRICTAS PARA TU DECISIÓN:
-- Si encuentras AL MENOS DOS FACTORES A FAVOR (ej: soporte + patrón de reversión, o EMA como resistencia + velas rojas), DEBES tomar posición (Buy o Sell).
-- No te quedes en Hold por falta de "confirmación total". Los profesionales entran en zonas de valor, no solo en rupturas.
-- Si el precio está en un rango, busca rebotes en los extremos del rango.
-- Si la EMA ha sido tocada múltiples veces y el precio está del lado correcto, úsala como soporte/resistencia dinámica.
-
-Analiza la imagen del gráfico y responde ÚNICAMENTE con un JSON válido (sin texto adicional fuera del JSON). El JSON debe tener este formato:
-{
-  "decision": "Buy/Sell/Hold",
-  "patron": "Nombre del patrón o situación",
-  "razones": ["Razón1", "Razón2", "Razón3"]
-}
-No incluyas ```json ni explicaciones fuera del JSON.
-"""
+        Eres Steven Nison, el mayor experto mundial en velas japonesas y análisis técnico.
+        Mira atentamente el gráfico de BTCUSDT en 5 minutos.
+        Actúa como un trader institucional: analiza la imagen en su totalidad (velas, tendencia, EMA20, soportes/resistencias, patrones) y decide si debes comprar (Buy), vender (Sell) o esperar (Hold).
+        Responde ÚNICAMENTE con un JSON válido en este formato:
+        {
+          "decision": "Buy/Sell/Hold",
+          "patron": "nombre del patrón o situación clave que ves",
+          "razones": ["razón corta 1", "razón corta 2", "razón corta 3"]
+        }
+        No incluyas texto fuera del JSON. Sé directo y profesional.
+        """
 
         respuesta = client.chat.completions.create(
             model=MODELO_VISION,
@@ -244,21 +237,19 @@ No incluyas ```json ni explicaciones fuera del JSON.
                     ]
                 }
             ],
-            temperature=0.15,
-            max_tokens=400
+            temperature=0.3,   # Suficiente creatividad para no ser conservador
+            max_tokens=300
         )
 
         raw = respuesta.choices[0].message.content
         print(f"🔍 Respuesta cruda de IA:\n{raw}")
 
-        # Limpiar marcadores de código
         cleaned = limpiar_respuesta_json(raw)
         datos = json.loads(cleaned)
 
         decision = datos.get("decision", "Hold")
         patron = datos.get("patron", "Patrón técnico")
         razones = datos.get("razones", ["Análisis técnico"])
-        # Asegurar que razones sea una lista de strings
         if isinstance(razones, str):
             razones = [razones]
         elif not isinstance(razones, list):
@@ -271,7 +262,7 @@ No incluyas ```json ni explicaciones fuera del JSON.
         return "Hold", ["Error en análisis"], "Error API", ""
 
 # ======================================================
-# GRÁFICOS (igual que antes)
+# GRÁFICOS (igual que antes, sin cambios)
 # ======================================================
 def generar_grafico_entrada(df, decision, razones, patron, soporte, resistencia, slope, intercept):
     df_plot = df.tail(GRAFICO_VELAS_LIMIT).copy()
@@ -297,7 +288,7 @@ def generar_grafico_entrada(df, decision, razones, patron, soporte, resistencia,
     if 'ema20' in df_plot.columns:
         ax.plot(x, df_plot['ema20'], 'y', lw=2, label='EMA20')
 
-    texto_ia = f"GROQ VISION V99.7 | Decisión: {decision.upper()}\nPatrón: {patron[:70]}\n"
+    texto_ia = f"GROQ VISION V99.9 | Decisión: {decision.upper()}\nPatrón: {patron[:70]}\n"
     texto_ia += "Razones:\n" + "\n".join(razones[:3])
     ax.text(0.01, 0.99, texto_ia, transform=ax.transAxes, fontsize=10,
             verticalalignment='top', bbox=dict(boxstyle='round', facecolor='black', alpha=0.85),
@@ -368,7 +359,7 @@ def generar_grafico_salida(df, posicion, precio_entrada, precio_salida, pnl, win
     return ruta
 
 # ======================================================
-# GESTIÓN DE RIESGO Y PAPER TRADING (sin cambios funcionales)
+# GESTIÓN DE RIESGO Y PAPER TRADING (sin cambios)
 # ======================================================
 def risk_management_check():
     global PAPER_DAILY_START_BALANCE, PAPER_STOPPED_TODAY, PAPER_CURRENT_DAY, PAPER_BALANCE
@@ -541,8 +532,8 @@ def run_bot():
     global ULTIMA_DECISION, ULTIMO_MOTIVO, ULTIMA_RAZONES, ULTIMO_PATRON
     global ADAPTIVE_BIAS, ADAPTIVE_SL_MULT, ADAPTIVE_TP1_MULT, ADAPTIVE_TRAILING_MULT
 
-    print("🤖 BOT V99.7 INICIADO - IA más decidida, logs limpios, sin JSON crudo")
-    telegram_mensaje("🤖 BOT V99.7 INICIADO: IA más activa, responde rápido, logs legibles.")
+    print("🤖 BOT V99.9 INICIADO - Groq con prompt libre estilo Nison (sin restricciones)")
+    telegram_mensaje("🤖 BOT V99.9 INICIADO: IA con análisis visual abierto, decide como humano.")
     ultima_vela_operada = None
 
     while True:
@@ -558,7 +549,6 @@ def run_bot():
             drawdown = (PAPER_BALANCE - PAPER_DAILY_START_BALANCE) / PAPER_DAILY_START_BALANCE * 100
             winrate = (PAPER_WIN / PAPER_TRADES_TOTALES) * 100 if PAPER_TRADES_TOTALES > 0 else 0
 
-            # Heartbeat limpio
             print(f"\n{'='*60}")
             print(f"💓 HEARTBEAT - {datetime.now(timezone.utc).strftime('%H:%M:%S')}")
             print(f"💰 Precio: {precio_mercado:.2f} | ATR: {atr_actual:.2f}")
@@ -575,7 +565,6 @@ def run_bot():
                 ruta_temp = generar_grafico_entrada(df, "Hold", ["Analizando..."], "Esperando", soporte, resistencia, slope, intercept)
                 decision, razones, patron, raw = analizar_con_groq_vision(ruta_temp)
 
-                # Mostrar análisis de forma legible
                 print(f"📊 Decisión IA: {decision}")
                 print(f"📌 Patrón: {patron}")
                 print("📝 Razones:")

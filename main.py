@@ -1,9 +1,10 @@
-# BOT TRADING V99.9 – GROQ VISION (PROMPT LIBRE, ESTILO NISON)
-# ============================================================
-# - Prompt minimalista: "Mira el gráfico y decide como Steven Nison"
-# - Sin instrucciones rígidas, la IA debe interpretar visualmente
-# - Logs limpios, respuesta JSON simple
-# ============================================================
+# BOT TRADING V100.0 – GEMINI VISION (ANÁLISIS PROFESIONAL DE GRÁFICOS)
+# ====================================================================
+# - Gemini 2.0 Flash interpreta el gráfico como un trader humano experto
+# - Autoaprendizaje cada 10 trades (ajuste de sesgo, SL, TP1, trailing)
+# - Logs completos en consola y Telegram, gráficos de entrada/salida
+# - Sin TP2 fijo: solo TP1 + trailing stop
+# ====================================================================
 
 import os
 import time
@@ -13,7 +14,6 @@ import json
 import re
 import numpy as np
 import pandas as pd
-import base64
 from scipy.stats import linregress
 from datetime import datetime, timezone
 from collections import Counter
@@ -22,14 +22,17 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-from groq import Groq
+import google.generativeai as genai
+from PIL import Image
 
 # ======================================================
 # CONFIGURACIÓN GENERAL
 # ======================================================
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-client = Groq(api_key=GROQ_API_KEY)
-MODELO_VISION = "meta-llama/llama-4-scout-17b-16e-instruct"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+if not GEMINI_API_KEY:
+    raise ValueError("❌ Falta GEMINI_API_KEY en variables de entorno")
+genai.configure(api_key=GEMINI_API_KEY)
+MODELO_VISION = "gemini-2.0-flash-exp"  # o "gemini-1.5-pro" si prefieres
 
 SYMBOL = "BTCUSDT"
 INTERVAL = "5"
@@ -44,7 +47,7 @@ DEFAULT_TRAILING_MULT = 1.8
 PORCENTAJE_CIERRE_TP1 = 0.5
 
 # ======================================================
-# PAPER TRADING (SIMULADO) – mismo que antes
+# PAPER TRADING (SIMULADO)
 # ======================================================
 PAPER_BALANCE_INICIAL = 100.0
 PAPER_BALANCE = PAPER_BALANCE_INICIAL
@@ -151,7 +154,7 @@ def detectar_zonas_mercado(df, idx=-2, ventana_macro=120):
     return soporte_horiz, resistencia_horiz, slope, intercept, tendencia_macro
 
 # ======================================================
-# AUTOAPRENDIZAJE (igual)
+# AUTOAPRENDIZAJE (cada 10 trades)
 # ======================================================
 def aprender_de_trades():
     global ADAPTIVE_BIAS, ADAPTIVE_SL_MULT, ADAPTIVE_TP1_MULT, ADAPTIVE_TRAILING_MULT
@@ -195,57 +198,39 @@ def aprender_de_trades():
     ULTIMO_APRENDIZAJE = len(TRADE_HISTORY)
 
 # ======================================================
-# IA GROQ CON PROMPT MINIMALISTA (ESTILO NISON)
+# ANÁLISIS CON GEMINI VISION (simple y potente)
 # ======================================================
-def limpiar_respuesta_json(texto):
-    """Extrae el JSON de la respuesta, eliminando marcadores."""
-    match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', texto, re.DOTALL)
-    if match:
-        return match.group(1)
-    match = re.search(r'\{.*\}', texto, re.DOTALL)
-    if match:
-        return match.group(0)
-    return texto
-
-def analizar_con_groq_vision(ruta_imagen):
+def analizar_con_gemini(ruta_imagen):
     try:
-        with open(ruta_imagen, "rb") as img_file:
-            imagen_base64 = base64.b64encode(img_file.read()).decode("utf-8")
+        # Cargar imagen
+        img = Image.open(ruta_imagen)
 
-        # PROMPT LIBRE, SIN INSTRUCCIONES ESPECÍFICAS
+        # Prompt simple pero efectivo: Gemini interpreta como humano
         prompt = """
-        Eres Steven Nison, el mayor experto mundial en velas japonesas y análisis técnico.
-        Mira atentamente el gráfico de BTCUSDT en 5 minutos.
-        Actúa como un trader institucional: analiza la imagen en su totalidad (velas, tendencia, EMA20, soportes/resistencias, patrones) y decide si debes comprar (Buy), vender (Sell) o esperar (Hold).
-        Responde ÚNICAMENTE con un JSON válido en este formato:
+        Eres Steven Nison, el mayor experto en velas japonesas y análisis técnico.
+        Analiza el gráfico de BTCUSDT en 5 minutos como si lo vieras en tiempo real.
+        Evalúa tendencia, velas, EMA20, soportes/resistencias y patrones.
+        Decide si comprar (Buy), vender (Sell) o esperar (Hold).
+        Responde ÚNICAMENTE con un JSON en este formato exacto:
         {
           "decision": "Buy/Sell/Hold",
-          "patron": "nombre del patrón o situación clave que ves",
-          "razones": ["razón corta 1", "razón corta 2", "razón corta 3"]
+          "patron": "nombre del patrón o situación",
+          "razones": ["razón1", "razón2", "razón3"]
         }
-        No incluyas texto fuera del JSON. Sé directo y profesional.
+        No incluyas texto adicional fuera del JSON.
         """
 
-        respuesta = client.chat.completions.create(
-            model=MODELO_VISION,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{imagen_base64}"}}
-                    ]
-                }
-            ],
-            temperature=0.3,   # Suficiente creatividad para no ser conservador
-            max_tokens=300
-        )
+        model = genai.GenerativeModel(MODELO_VISION)
+        response = model.generate_content([prompt, img])
+        raw = response.text
+        print(f"🔍 Respuesta Gemini:\n{raw}")
 
-        raw = respuesta.choices[0].message.content
-        print(f"🔍 Respuesta cruda de IA:\n{raw}")
-
-        cleaned = limpiar_respuesta_json(raw)
-        datos = json.loads(cleaned)
+        # Limpiar posibles marcadores de código
+        match = re.search(r'\{.*\}', raw, re.DOTALL)
+        if match:
+            datos = json.loads(match.group(0))
+        else:
+            datos = json.loads(raw)
 
         decision = datos.get("decision", "Hold")
         patron = datos.get("patron", "Patrón técnico")
@@ -258,11 +243,11 @@ def analizar_con_groq_vision(ruta_imagen):
         return decision, razones, patron, raw
 
     except Exception as e:
-        print(f"❌ Error crítico en IA visión: {e}")
+        print(f"❌ Error en Gemini: {e}")
         return "Hold", ["Error en análisis"], "Error API", ""
 
 # ======================================================
-# GRÁFICOS (igual que antes, sin cambios)
+# GRÁFICOS (completos, con anotaciones)
 # ======================================================
 def generar_grafico_entrada(df, decision, razones, patron, soporte, resistencia, slope, intercept):
     df_plot = df.tail(GRAFICO_VELAS_LIMIT).copy()
@@ -288,7 +273,7 @@ def generar_grafico_entrada(df, decision, razones, patron, soporte, resistencia,
     if 'ema20' in df_plot.columns:
         ax.plot(x, df_plot['ema20'], 'y', lw=2, label='EMA20')
 
-    texto_ia = f"GROQ VISION V99.9 | Decisión: {decision.upper()}\nPatrón: {patron[:70]}\n"
+    texto_ia = f"GEMINI VISION V100.0 | Decisión: {decision.upper()}\nPatrón: {patron[:70]}\n"
     texto_ia += "Razones:\n" + "\n".join(razones[:3])
     ax.text(0.01, 0.99, texto_ia, transform=ax.transAxes, fontsize=10,
             verticalalignment='top', bbox=dict(boxstyle='round', facecolor='black', alpha=0.85),
@@ -359,7 +344,7 @@ def generar_grafico_salida(df, posicion, precio_entrada, precio_salida, pnl, win
     return ruta
 
 # ======================================================
-# GESTIÓN DE RIESGO Y PAPER TRADING (sin cambios)
+# GESTIÓN DE RIESGO Y PAPER TRADING
 # ======================================================
 def risk_management_check():
     global PAPER_DAILY_START_BALANCE, PAPER_STOPPED_TODAY, PAPER_CURRENT_DAY, PAPER_BALANCE
@@ -532,8 +517,8 @@ def run_bot():
     global ULTIMA_DECISION, ULTIMO_MOTIVO, ULTIMA_RAZONES, ULTIMO_PATRON
     global ADAPTIVE_BIAS, ADAPTIVE_SL_MULT, ADAPTIVE_TP1_MULT, ADAPTIVE_TRAILING_MULT
 
-    print("🤖 BOT V99.9 INICIADO - Groq con prompt libre estilo Nison (sin restricciones)")
-    telegram_mensaje("🤖 BOT V99.9 INICIADO: IA con análisis visual abierto, decide como humano.")
+    print("🤖 BOT V100.0 INICIADO - GEMINI VISION (Análisis profesional de gráficos)")
+    telegram_mensaje("🤖 BOT V100.0 INICIADO: Gemini 2.0 Flash analiza el gráfico como Steven Nison.")
     ultima_vela_operada = None
 
     while True:
@@ -549,6 +534,7 @@ def run_bot():
             drawdown = (PAPER_BALANCE - PAPER_DAILY_START_BALANCE) / PAPER_DAILY_START_BALANCE * 100
             winrate = (PAPER_WIN / PAPER_TRADES_TOTALES) * 100 if PAPER_TRADES_TOTALES > 0 else 0
 
+            # Heartbeat en consola (detallado)
             print(f"\n{'='*60}")
             print(f"💓 HEARTBEAT - {datetime.now(timezone.utc).strftime('%H:%M:%S')}")
             print(f"💰 Precio: {precio_mercado:.2f} | ATR: {atr_actual:.2f}")
@@ -558,14 +544,16 @@ def run_bot():
             print(f"🎯 Trades totales: {PAPER_TRADES_TOTALES} | Wins: {PAPER_WIN} | Losses: {PAPER_LOSS} | Winrate: {winrate:.1f}%")
             print(f"💰 PnL global: {pnl_global:+.2f} USD | Balance: {PAPER_BALANCE:.2f} USD | Drawdown diario: {drawdown:.2f}%")
             print(f"🧠 Sesgo adaptativo: {ADAPTIVE_BIAS:+.2f} | SL: {ADAPTIVE_SL_MULT:.2f} | TP1: {ADAPTIVE_TP1_MULT:.2f} | Trail: {ADAPTIVE_TRAILING_MULT:.2f}")
-            print(f"🤖 Última decisión: {ULTIMA_DECISION} - {ULTIMO_MOTIVO[:80]}")
+            print(f"🤖 Última decisión IA: {ULTIMA_DECISION} - Motivo: {ULTIMO_MOTIVO[:80]}")
             print(f"{'='*60}")
 
             if PAPER_POSICION_ACTIVA is None and ultima_vela_operada != tiempo_vela_cerrada:
+                # Generar gráfico temporal para la IA (sin anotaciones de decisión)
                 ruta_temp = generar_grafico_entrada(df, "Hold", ["Analizando..."], "Esperando", soporte, resistencia, slope, intercept)
-                decision, razones, patron, raw = analizar_con_groq_vision(ruta_temp)
+                decision, razones, patron, raw = analizar_con_gemini(ruta_temp)
 
-                print(f"📊 Decisión IA: {decision}")
+                # Mostrar análisis de forma legible
+                print(f"📊 Decisión Gemini: {decision}")
                 print(f"📌 Patrón: {patron}")
                 print("📝 Razones:")
                 for r in razones:
@@ -579,8 +567,9 @@ def run_bot():
                 if decision in ["Buy", "Sell"] and risk_management_check():
                     if paper_abrir_posicion(decision, precio_mercado, atr_actual, razones, patron):
                         ultima_vela_operada = tiempo_vela_cerrada
+                        # Generar y enviar gráfico de entrada definitivo
                         ruta_entrada = generar_grafico_entrada(df, decision, razones, patron, soporte, resistencia, slope, intercept)
-                        caption = f"🚀 Señal {decision.upper()}\nPatrón: {patron}\n" + "\n".join(razones[:2])
+                        caption = f"🚀 Señal {decision.upper()} (Gemini)\nPatrón: {patron}\n" + "\n".join(razones[:2])
                         telegram_enviar_imagen(ruta_entrada, caption=caption)
                 else:
                     print(f"⏸️ Hold: {ULTIMO_MOTIVO}")

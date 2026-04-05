@@ -1,10 +1,9 @@
-# BOT TRADING V100.0 – GEMINI VISION (ANÁLISIS PROFESIONAL DE GRÁFICOS)
-# ====================================================================
-# - Gemini 2.0 Flash interpreta el gráfico como un trader humano experto
-# - Autoaprendizaje cada 10 trades (ajuste de sesgo, SL, TP1, trailing)
-# - Logs completos en consola y Telegram, gráficos de entrada/salida
-# - Sin TP2 fijo: solo TP1 + trailing stop
-# ====================================================================
+# BOT TRADING V100.1 – GEMINI VISION (google.genai)
+# ==================================================
+# - Usa el nuevo SDK google.genai (recomendado por Google)
+# - Análisis visual profesional de gráficos de trading
+# - Autoaprendizaje, logs detallados, gráficos en Telegram
+# ==================================================
 
 import os
 import time
@@ -22,7 +21,8 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from PIL import Image
 
 # ======================================================
@@ -31,8 +31,10 @@ from PIL import Image
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 if not GEMINI_API_KEY:
     raise ValueError("❌ Falta GEMINI_API_KEY en variables de entorno")
-genai.configure(api_key=GEMINI_API_KEY)
-MODELO_VISION = "gemini-2.0-flash-exp"  # o "gemini-1.5-pro" si prefieres
+
+# Cliente nuevo
+client = genai.Client(api_key=GEMINI_API_KEY)
+MODELO_VISION = "gemini-2.0-flash-exp"  # o "gemini-1.5-pro"
 
 SYMBOL = "BTCUSDT"
 INTERVAL = "5"
@@ -47,7 +49,7 @@ DEFAULT_TRAILING_MULT = 1.8
 PORCENTAJE_CIERRE_TP1 = 0.5
 
 # ======================================================
-# PAPER TRADING (SIMULADO)
+# PAPER TRADING (SIMULADO) – mismo que antes
 # ======================================================
 PAPER_BALANCE_INICIAL = 100.0
 PAPER_BALANCE = PAPER_BALANCE_INICIAL
@@ -198,14 +200,12 @@ def aprender_de_trades():
     ULTIMO_APRENDIZAJE = len(TRADE_HISTORY)
 
 # ======================================================
-# ANÁLISIS CON GEMINI VISION (simple y potente)
+# ANÁLISIS CON GEMINI usando google.genai
 # ======================================================
 def analizar_con_gemini(ruta_imagen):
     try:
-        # Cargar imagen
         img = Image.open(ruta_imagen)
 
-        # Prompt simple pero efectivo: Gemini interpreta como humano
         prompt = """
         Eres Steven Nison, el mayor experto en velas japonesas y análisis técnico.
         Analiza el gráfico de BTCUSDT en 5 minutos como si lo vieras en tiempo real.
@@ -220,12 +220,15 @@ def analizar_con_gemini(ruta_imagen):
         No incluyas texto adicional fuera del JSON.
         """
 
-        model = genai.GenerativeModel(MODELO_VISION)
-        response = model.generate_content([prompt, img])
+        # Usar el nuevo cliente
+        response = client.models.generate_content(
+            model=MODELO_VISION,
+            contents=[prompt, img]
+        )
         raw = response.text
         print(f"🔍 Respuesta Gemini:\n{raw}")
 
-        # Limpiar posibles marcadores de código
+        # Limpiar posibles marcadores
         match = re.search(r'\{.*\}', raw, re.DOTALL)
         if match:
             datos = json.loads(match.group(0))
@@ -247,7 +250,7 @@ def analizar_con_gemini(ruta_imagen):
         return "Hold", ["Error en análisis"], "Error API", ""
 
 # ======================================================
-# GRÁFICOS (completos, con anotaciones)
+# GRÁFICOS (completos)
 # ======================================================
 def generar_grafico_entrada(df, decision, razones, patron, soporte, resistencia, slope, intercept):
     df_plot = df.tail(GRAFICO_VELAS_LIMIT).copy()
@@ -273,7 +276,7 @@ def generar_grafico_entrada(df, decision, razones, patron, soporte, resistencia,
     if 'ema20' in df_plot.columns:
         ax.plot(x, df_plot['ema20'], 'y', lw=2, label='EMA20')
 
-    texto_ia = f"GEMINI VISION V100.0 | Decisión: {decision.upper()}\nPatrón: {patron[:70]}\n"
+    texto_ia = f"GEMINI VISION V100.1 | Decisión: {decision.upper()}\nPatrón: {patron[:70]}\n"
     texto_ia += "Razones:\n" + "\n".join(razones[:3])
     ax.text(0.01, 0.99, texto_ia, transform=ax.transAxes, fontsize=10,
             verticalalignment='top', bbox=dict(boxstyle='round', facecolor='black', alpha=0.85),
@@ -344,7 +347,7 @@ def generar_grafico_salida(df, posicion, precio_entrada, precio_salida, pnl, win
     return ruta
 
 # ======================================================
-# GESTIÓN DE RIESGO Y PAPER TRADING
+# GESTIÓN DE RIESGO Y PAPER TRADING (sin cambios)
 # ======================================================
 def risk_management_check():
     global PAPER_DAILY_START_BALANCE, PAPER_STOPPED_TODAY, PAPER_CURRENT_DAY, PAPER_BALANCE
@@ -517,8 +520,8 @@ def run_bot():
     global ULTIMA_DECISION, ULTIMO_MOTIVO, ULTIMA_RAZONES, ULTIMO_PATRON
     global ADAPTIVE_BIAS, ADAPTIVE_SL_MULT, ADAPTIVE_TP1_MULT, ADAPTIVE_TRAILING_MULT
 
-    print("🤖 BOT V100.0 INICIADO - GEMINI VISION (Análisis profesional de gráficos)")
-    telegram_mensaje("🤖 BOT V100.0 INICIADO: Gemini 2.0 Flash analiza el gráfico como Steven Nison.")
+    print("🤖 BOT V100.1 INICIADO - GEMINI VISION (google.genai)")
+    telegram_mensaje("🤖 BOT V100.1 INICIADO: Gemini 2.0 Flash analiza el gráfico como Steven Nison.")
     ultima_vela_operada = None
 
     while True:
@@ -534,7 +537,7 @@ def run_bot():
             drawdown = (PAPER_BALANCE - PAPER_DAILY_START_BALANCE) / PAPER_DAILY_START_BALANCE * 100
             winrate = (PAPER_WIN / PAPER_TRADES_TOTALES) * 100 if PAPER_TRADES_TOTALES > 0 else 0
 
-            # Heartbeat en consola (detallado)
+            # Heartbeat en consola
             print(f"\n{'='*60}")
             print(f"💓 HEARTBEAT - {datetime.now(timezone.utc).strftime('%H:%M:%S')}")
             print(f"💰 Precio: {precio_mercado:.2f} | ATR: {atr_actual:.2f}")
@@ -548,11 +551,9 @@ def run_bot():
             print(f"{'='*60}")
 
             if PAPER_POSICION_ACTIVA is None and ultima_vela_operada != tiempo_vela_cerrada:
-                # Generar gráfico temporal para la IA (sin anotaciones de decisión)
                 ruta_temp = generar_grafico_entrada(df, "Hold", ["Analizando..."], "Esperando", soporte, resistencia, slope, intercept)
                 decision, razones, patron, raw = analizar_con_gemini(ruta_temp)
 
-                # Mostrar análisis de forma legible
                 print(f"📊 Decisión Gemini: {decision}")
                 print(f"📌 Patrón: {patron}")
                 print("📝 Razones:")
@@ -567,7 +568,6 @@ def run_bot():
                 if decision in ["Buy", "Sell"] and risk_management_check():
                     if paper_abrir_posicion(decision, precio_mercado, atr_actual, razones, patron):
                         ultima_vela_operada = tiempo_vela_cerrada
-                        # Generar y enviar gráfico de entrada definitivo
                         ruta_entrada = generar_grafico_entrada(df, decision, razones, patron, soporte, resistencia, slope, intercept)
                         caption = f"🚀 Señal {decision.upper()} (Gemini)\nPatrón: {patron}\n" + "\n".join(razones[:2])
                         telegram_enviar_imagen(ruta_entrada, caption=caption)

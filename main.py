@@ -1,4 +1,4 @@
-# BOT TRADING V99.19 – GROQ (NISON ESTRICTO: CONTEXTO, RECHAZOS Y VETOS)
+# BOT TRADING V99.20 – GROQ (NISON HOLÍSTICO: REVERSIÓN, CONTINUACIÓN Y CONTEXTO)
 # ==============================================================================
 import os, time, requests, json, re, numpy as np, pandas as pd
 from scipy.stats import linregress
@@ -26,37 +26,27 @@ DEFAULT_TP1_MULT = 1.6
 DEFAULT_TRAILING_MULT = 1.8
 PORCENTAJE_CIERRE_TP1 = 0.5
 
-# =================== PAPER TRADING ===================
+# =================== VARIABLES GLOBALES ===================
 PAPER_BALANCE_INICIAL = 100.0
 PAPER_BALANCE = PAPER_BALANCE_INICIAL
 PAPER_POSICION_ACTIVA = None
-PAPER_PRECIO_ENTRADA = None
-PAPER_SL_INICIAL = None
-PAPER_TP1 = None
+PAPER_PRECIO_ENTRADA, PAPER_SL_INICIAL, PAPER_TP1 = None, None, None
 PAPER_TRAILING_MULT = DEFAULT_TRAILING_MULT
-PAPER_SIZE_BTC = 0.0
-PAPER_SIZE_BTC_RESTANTE = 0.0
+PAPER_SIZE_BTC, PAPER_SIZE_BTC_RESTANTE = 0.0, 0.0
 PAPER_TP1_EJECUTADO = False
 PAPER_PNL_PARCIAL = 0.0
 PAPER_SL_ACTUAL = None
 PAPER_WIN, PAPER_LOSS, PAPER_TRADES_TOTALES = 0, 0, 0
-TRADE_HISTORY = []
 
 MAX_DAILY_DRAWDOWN_PCT = 0.20
 PAPER_DAILY_START_BALANCE = PAPER_BALANCE_INICIAL
 PAPER_STOPPED_TODAY = False
 PAPER_CURRENT_DAY = None
 
-ADAPTIVE_BIAS = 0.0
-ADAPTIVE_SL_MULT = DEFAULT_SL_MULT
-ADAPTIVE_TP1_MULT = DEFAULT_TP1_MULT
-ADAPTIVE_TRAILING_MULT = DEFAULT_TRAILING_MULT
-ULTIMO_APRENDIZAJE = None
-
 ULTIMA_DECISION, ULTIMO_MOTIVO, ULTIMA_RAZONES, ULTIMO_PATRON = "Hold", "Esperando señal", [], ""
 ULTIMOS_MULTIS = (DEFAULT_SL_MULT, DEFAULT_TP1_MULT, DEFAULT_TRAILING_MULT)
 
-# =================== TELEGRAM ===================
+# =================== COMUNICACIÓN ===================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 BASE_URL = "https://api.bybit.com"
@@ -99,115 +89,135 @@ def detectar_zonas_mercado(df, idx=-2, ventana_macro=120):
     y = df_eval['close'].values[-ventana_macro:] if len(df_eval) >= ventana_macro else df_eval['close'].values
     slope, intercept, _, _, _ = linregress(np.arange(len(y)), y)
     
-    # Micro tendencia (últimas 5 velas)
-    micro_slope, _, _, _, _ = linregress(np.arange(5), df_eval['close'].values[-5:])
-    micro_tendencia = 'CAYENDO FUERTE' if micro_slope < -0.5 else 'SUBIENDO FUERTE' if micro_slope > 0.5 else 'LATERAL'
-    
+    micro_slope, _, _, _, _ = linregress(np.arange(8), df_eval['close'].values[-8:])
+    micro_tendencia = 'CAYENDO' if micro_slope < -0.2 else 'SUBIENDO' if micro_slope > 0.2 else 'CONSOLIDANDO'
     tendencia = 'ALCISTA' if slope > 0.01 else 'BAJISTA' if slope < -0.01 else 'LATERAL'
+    
     return soporte, resistencia, slope, intercept, tendencia, micro_tendencia
 
-# =================== ANÁLISIS NISON (CONTEXTUAL) ===================
-def analizar_patron_nison(v_actual, v_previa, v_pre_previa, micro_tendencia):
-    # Calcular anatomía vela actual
-    rango = v_actual['high'] - v_actual['low']
-    if rango == 0: return "Doji", "Sin rango"
-    cuerpo = abs(v_actual['close'] - v_actual['open'])
-    cuerpo_pct = (cuerpo / rango) * 100
-    sombra_sup_pct = ((v_actual['high'] - max(v_actual['close'], v_actual['open'])) / rango) * 100
-    sombra_inf_pct = ((min(v_actual['close'], v_actual['open']) - v_actual['low']) / rango) * 100
-    es_verde = v_actual['close'] > v_actual['open']
-    previa_verde = v_previa['close'] > v_previa['open']
-
-    anatomia = f"Cuerpo:{cuerpo_pct:.0f}% | Msup:{sombra_sup_pct:.0f}% | Minf:{sombra_inf_pct:.0f}%"
-    patron = f"Vela {'Verde' if es_verde else 'Roja'} Normal"
-
-    # 1. DOJI
-    if cuerpo_pct < 10: patron = "DOJI (Indecisión)"
+# =================== MOTOR HOLÍSTICO NISON ===================
+def analizar_patron_nison_completo(df, idx):
+    if idx < 3: return "Datos insuficientes"
     
-    # 2. PATRONES DE REVERSIÓN (REQUIEREN CONTEXTO DE TENDENCIA PREVIA)
-    if "CAYENDO" in micro_tendencia:
-        if sombra_inf_pct > 65 and cuerpo_pct < 25 and sombra_sup_pct < 10:
-            patron = "🔥 MARTILLO (Reversión Alcista muy fuerte si está en soporte)"
-        elif es_verde and not previa_verde and v_actual['close'] > v_previa['open'] and v_actual['open'] < v_previa['close']:
-            patron = "🔥 ENVOLVENTE ALCISTA (Fuerte señal de compra)"
-        elif es_verde and not previa_verde and v_actual['close'] > (v_previa['open'] + v_previa['close'])/2 and v_actual['open'] < v_previa['close']:
-            patron = "✅ PAUTA PENETRANTE (Posible reversión alcista)"
+    # Extraer las últimas 3 velas
+    v3 = df.iloc[idx]   # Actual
+    v2 = df.iloc[idx-1] # Anterior
+    v1 = df.iloc[idx-2] # Pre-anterior
+    
+    def stats(v):
+        rango = v['high'] - v['low']
+        cuerpo = abs(v['close'] - v['open'])
+        c_pct = (cuerpo / rango) * 100 if rango > 0 else 0
+        s_sup = ((v['high'] - max(v['close'], v['open'])) / rango) * 100 if rango > 0 else 0
+        s_inf = ((min(v['close'], v['open']) - v['low']) / rango) * 100 if rango > 0 else 0
+        es_verde = v['close'] > v['open']
+        return rango, cuerpo, c_pct, s_sup, s_inf, es_verde
 
-    elif "SUBIENDO" in micro_tendencia:
-        if sombra_sup_pct > 65 and cuerpo_pct < 25 and sombra_inf_pct < 10:
-            patron = "🚨 ESTRELLA FUGAZ (Reversión Bajista muy fuerte si está en resistencia)"
-        if sombra_inf_pct > 65 and cuerpo_pct < 25 and sombra_sup_pct < 10:
-            patron = "🚨 HOMBRE COLGADO (Reversión Bajista, el soporte falló)"
-        elif not es_verde and previa_verde and v_actual['close'] < v_previa['open'] and v_actual['open'] > v_previa['close']:
-            patron = "🚨 ENVOLVENTE BAJISTA (Fuerte señal de venta)"
-        elif not es_verde and previa_verde and v_actual['close'] < (v_previa['open'] + v_previa['close'])/2 and v_actual['open'] > v_previa['close']:
-            patron = "⚠️ NUBE OSCURA (Posible reversión bajista)"
+    r3, c3, cp3, sup3, inf3, verde3 = stats(v3)
+    r2, c2, cp2, sup2, inf2, verde2 = stats(v2)
+    r1, c1, cp1, sup1, inf1, verde1 = stats(v1)
 
-    # Patrón de continuación sin importar microtendencia
-    if cuerpo_pct > 80:
-        patron = "VELA MARUBOZU / IMPULSO " + ("ALCISTA" if es_verde else "BAJISTA")
+    patrones = []
 
-    return patron, anatomia
+    # 1. PATRONES DE 3 VELAS (Los más fuertes)
+    if not verde1 and c1 > r1*0.5 and cp2 < 30 and verde3 and c3 > r3*0.5 and v3['close'] > (v1['open']+v1['close'])/2:
+        patrones.append("🌟 ESTRELLA DE LA MAÑANA (Morning Star - Reversión Alcista Mayor)")
+    if verde1 and c1 > r1*0.5 and cp2 < 30 and not verde3 and c3 > r3*0.5 and v3['close'] < (v1['open']+v1['close'])/2:
+        patrones.append("🌟 ESTRELLA DEL ATARDECER (Evening Star - Reversión Bajista Mayor)")
+    if verde1 and verde2 and verde3 and c3 > c2 and c2 > c1 and inf3 < 20 and inf2 < 20:
+        patrones.append("🚀 TRES SOLDADOS BLANCOS (Continuación Alcista Fuerte)")
+    if not verde1 and not verde2 and not verde3 and c3 > c2 and c2 > c1 and sup3 < 20 and sup2 < 20:
+        patrones.append("🩸 TRES CUERVOS NEGROS (Continuación Bajista Fuerte)")
 
-# =================== DESCRIPCIÓN ENRIQUECIDA ===================
+    # 2. PATRONES DE 2 VELAS
+    # Envolventes
+    if not verde2 and verde3 and v3['close'] > v2['open'] and v3['open'] < v2['close']:
+        patrones.append("🐂 ENVOLVENTE ALCISTA (Bullish Engulfing)")
+    if verde2 and not verde3 and v3['close'] < v2['open'] and v3['open'] > v2['close']:
+        patrones.append("🐻 ENVOLVENTE BAJISTA (Bearish Engulfing)")
+    
+    # Harami (Mujer Embarazada) - Pérdida de momentum de la tendencia anterior
+    if not verde2 and verde3 and c2 > r2*0.6 and v3['high'] < v2['open'] and v3['low'] > v2['close']:
+        patrones.append("⚠️ HARAMI ALCISTA (Agotamiento Bajista - Posible Reversión)")
+    if verde2 and not verde3 and c2 > r2*0.6 and v3['high'] < v2['close'] and v3['low'] > v2['open']:
+        patrones.append("⚠️ HARAMI BAJISTA (Agotamiento Alcista - Posible Reversión)")
+
+    # Perforantes y Nube Oscura
+    if not verde2 and verde3 and v3['open'] < v2['close'] and v3['close'] > (v2['open'] + v2['close'])/2:
+        patrones.append("🔪 PAUTA PENETRANTE (Piercing Line - Alcista)")
+    if verde2 and not verde3 and v3['open'] > v2['close'] and v3['close'] < (v2['open'] + v2['close'])/2:
+        patrones.append("⛈️ NUBE OSCURA (Dark Cloud Cover - Bajista)")
+
+    # Pinzas (Tweezers)
+    if abs(v3['low'] - v2['low']) < r3 * 0.1 and inf3 > 40 and inf2 > 40:
+        patrones.append("✂️ PINZAS DE SUELO (Tweezer Bottom - Soporte Fuerte)")
+    if abs(v3['high'] - v2['high']) < r3 * 0.1 and sup3 > 40 and sup2 > 40:
+        patrones.append("✂️ PINZAS DE TECHO (Tweezer Top - Resistencia Fuerte)")
+
+    # 3. PATRONES DE 1 VELA (Contextuales)
+    if cp3 < 10:
+        patrones.append("⚖️ DOJI (Indecisión / Equilibrio total)")
+    elif cp3 < 25 and sup3 > 30 and inf3 > 30:
+        patrones.append("🌀 PEONZA (Spinning Top - Pérdida de Momentum)")
+    else:
+        if inf3 > 65 and cp3 < 25 and sup3 < 10:
+            patrones.append("🔨 MARTILLO / PINBAR ALCISTA (Rechazo a la baja)")
+        elif sup3 > 65 and cp3 < 25 and inf3 < 10:
+            patrones.append("🌠 ESTRELLA FUGAZ / PINBAR BAJISTA (Rechazo al alza)")
+        elif cp3 > 85:
+            patrones.append(f"🧱 MARUBOZU {'ALCISTA' if verde3 else 'BAJISTA'} (Fuerza Dominante Unidireccional)")
+
+    if not patrones:
+        patrones.append(f"Vela {'Verde' if verde3 else 'Roja'} Estándar (Cuerpo: {cp3:.0f}%)")
+
+    return " | ".join(patrones)
+
+# =================== GENERACIÓN DEL INFORME (CONTEXTO) ===================
 def generar_descripcion_nison(df, idx=-2):
     vela_actual = df.iloc[idx]
     precio = vela_actual['close']
     atr = df['atr'].iloc[idx]
     ema20 = df['ema20'].iloc[idx]
     ema50 = df['ema50'].iloc[idx]
-    rsi = df['rsi'].iloc[idx]
     soporte, resistencia, slope, intercept, tendencia, micro_tendencia = detectar_zonas_mercado(df, idx)
     
-    # Análisis de Interacción con EMA (Rechazos Reales)
-    distancia_ema20 = (precio - ema20) / ema20 * 100
-    interaccion_ema = "Lejos de EMA20"
+    # Detectar el patrón actual complejo
+    patron_detectado = analizar_patron_nison_completo(df, idx)
+
+    # Contexto del precio vs Soporte/Resistencia
+    zona_actual = "En rango medio (Tierra de nadie)"
+    if precio <= soporte + (atr * 1.5): zona_actual = f"🔥 EN ZONA DE SOPORTE CLAVE ({soporte:.2f})"
+    elif precio >= resistencia - (atr * 1.5): zona_actual = f"🚨 EN ZONA DE RESISTENCIA CLAVE ({resistencia:.2f})"
+
+    # Contexto EMA (Rechazos dinámicos)
+    interaccion_ema = "Fluctuando lejos de la EMA20"
     if vela_actual['low'] <= ema20 <= vela_actual['high']:
-        if vela_actual['close'] > ema20 and (ema20 - vela_actual['low']) > abs(vela_actual['close'] - vela_actual['open']):
-            interaccion_ema = "✅ RECHAZO DESDE ABAJO EN EMA20 (Mecha inferior la perforó, pero cerró arriba = SOPORTE DINÁMICO CONFIRMADO)"
-        elif vela_actual['close'] < ema20 and (vela_actual['high'] - ema20) > abs(vela_actual['close'] - vela_actual['open']):
-            interaccion_ema = "❌ RECHAZO DESDE ARRIBA EN EMA20 (Mecha superior la perforó, pero cerró abajo = RESISTENCIA DINÁMICA CONFIRMADA)"
-        else:
-            interaccion_ema = "Atravesando EMA20 (Consolidación/Indecisión)"
-    elif precio > ema20:
-        interaccion_ema = f"Precio firmemente por ENCIMA de EMA20 (+{distancia_ema20:.2f}%)"
-    else:
-        interaccion_ema = f"Precio firmemente por DEBAJO de EMA20 ({distancia_ema20:.2f}%)"
-
-    # Historial detallado de las últimas 5 velas (para ver secuencias)
-    historial_velas = []
-    for i in range(idx-4, idx+1):
-        if i < 1: continue
-        v = df.iloc[i]; v_prev = df.iloc[i-1]; v_prev2 = df.iloc[i-2]
-        pat, anat = analizar_patron_nison(v, v_prev, v_prev2, micro_tendencia)
-        historial_velas.append(f"Vela {df.index[i].strftime('%H:%M')}: {pat} | {anat}")
-
-    # Estructura horizontal
-    dist_soporte = (precio - soporte) / precio * 100
-    dist_resistencia = (resistencia - precio) / precio * 100
+        if vela_actual['close'] > ema20: interaccion_ema = "✅ RECHAZO DESDE ABAJO EN EMA20 (Validada como Soporte Dinámico)"
+        elif vela_actual['close'] < ema20: interaccion_ema = "❌ RECHAZO DESDE ARRIBA EN EMA20 (Validada como Resistencia Dinámica)"
+    elif precio > ema20 and precio < ema20 + (atr * 0.5): interaccion_ema = "Apoyándose firmemente sobre EMA20 (Soporte)"
+    elif precio < ema20 and precio > ema20 - (atr * 0.5): interaccion_ema = "Presionado firmemente bajo EMA20 (Resistencia)"
 
     descripcion = f"""
-=== INFORME STEVE NISON (BTCUSDT 5m) ===
+=== INFORME HOLÍSTICO STEVE NISON (BTCUSDT 5m) ===
 
-1. CONTEXTO DE TENDENCIA (LA REGLA #1 DE NISON)
-- Tendencia Macro (120 velas): {tendencia}
-- Micro-Tendencia (Últimas 5 velas): {micro_tendencia} 
-  (¡Crucial!: Los patrones de reversión solo valen si van en contra de esta micro-tendencia).
+1. EL PANORAMA (MACRO Y MICRO)
+- Tendencia Principal (Fondo): {tendencia}
+- Micro-Tendencia (Últimas 8 velas): {micro_tendencia}
+- Fase del Precio: {zona_actual}
 
-2. SOPORTES Y RESISTENCIAS HORIZONTALES
-- Resistencia Techo: {resistencia:.2f} (a {dist_resistencia:.2f}% de distancia)
-- Soporte Suelo: {soporte:.2f} (a {dist_soporte:.2f}% de distancia)
-*(Si el precio está muy cerca del soporte, buscar patrones alcistas. Si está cerca de resistencia, bajistas).*
+2. NIVELES CLAVE Y MEDIAS
+- Resistencia Techo: {resistencia:.2f}
+- Soporte Suelo: {soporte:.2f}
+- EMA 20 (Corto plazo): {interaccion_ema}
+- EMA 50 (Medio plazo): {ema50:.2f}
 
-3. EMA20 (SOPORTE/RESISTENCIA DINÁMICO)
-- Valor EMA20: {ema20:.2f}
-- Acción: {interaccion_ema}
+3. LECTURA DE VELAS (PATRÓN ACTUAL COMBINADO)
+- Acción del Precio Reciente (Velas 1 a 3): {patron_detectado}
 
-4. SECUENCIA DE VELAS EXACTA (LEER DE ARRIBA HACIA ABAJO)
-{chr(10).join(historial_velas)}
-
-5. INDICADORES EXTRA
-- RSI: {rsi:.1f}
+4. LÓGICA DE DECISIÓN NISON:
+- Los patrones de REVERSIÓN (Estrellas, Envolventes, Martillos) SOLO son válidos si ocurren en la "Zona de Soporte/Resistencia" adecuada y van EN CONTRA de la micro-tendencia agotada.
+- Los patrones de CONTINUACIÓN (Soldados, Cuervos, Marubozus) son señales para ENTRAR A FAVOR del rompimiento o tendencia.
+- Si el precio está en "Tierra de nadie" y forma un Doji o Peonza, indica consolidación.
 """
     return descripcion, atr
 
@@ -215,39 +225,34 @@ def generar_descripcion_nison(df, idx=-2):
 def analizar_con_groq_texto(descripcion, atr):
     try:
         system_msg = """
-        Eres Steve Nison. Analizas velas japonesas estrictamente por su CONTEXTO.
-        
-        REGLAS DE VETO ABSOLUTO (INQUEBRANTABLES):
-        1. VETO DE CUCHILLO CAYENDO: NUNCA sugieras "Buy" si la Micro-Tendencia es "CAYENDO FUERTE" y la última vela es ROJA. Debes esperar a una vela verde de confirmación (ej. Envolvente Alcista).
-        2. VETO DE MARTILLO: Si en las últimas 3 velas hubo un "MARTILLO" en zona de soporte, NUNCA sugieras "Sell", ya que los grandes capitales acaban de rechazar precios bajos.
-        3. VETO DE ESTRELLA FUGAZ: Si hubo una "ESTRELLA FUGAZ" o "ENVOLVENTE BAJISTA", NUNCA sugieras "Buy" hasta que la EMA20 sea recuperada.
-        4. VETO DE RANGO MEDIO: Si el precio está en el medio del rango (lejos de soporte, resistencia y EMA20), la decisión debe ser "Hold".
+        Eres Steve Nison. Analizas todo el "Panorama Holístico": Tendencia, Zonas Clave y Formaciones de Velas Combinadas.
 
-        LÓGICA DE DECISIÓN:
-        - BUY: Requiere que el precio rebote en Soporte o EMA20 (rechazo inferior) + Patrón alcista (Martillo, Envolvente verde).
-        - SELL: Requiere rechazo en Resistencia o EMA20 por debajo (mecha superior) + Patrón bajista (Estrella fugaz, Envolvente roja).
-        - HOLD: Si hay indecisión, velas Doji, o falta de confluencia.
+        REGLAS DE ORO:
+        1. NO operar en el medio de un rango ("Tierra de nadie") a menos que haya un patrón de continuación muy agresivo (Tres Soldados / Marubozu).
+        2. Para un "Buy" de reversión, EXIGE que la micro-tendencia sea bajista, el precio esté en Zona de Soporte o EMA20, y haya un patrón alcista (Estrella de la mañana, Pinzas de suelo, Envolvente alcista).
+        3. Para un "Sell" de reversión, EXIGE que la micro-tendencia sea alcista, el precio esté en Zona de Resistencia o EMA20, y haya un patrón bajista (Estrella del atardecer, Nube Oscura, Envolvente bajista).
+        4. Evita comprar contra la tendencia dominante sin una vela de confirmación fuerte.
 
-        Responde ÚNICAMENTE con un JSON válido:
+        Responde ÚNICAMENTE con un JSON válido en este formato estricto:
         {
           "decision": "Buy/Sell/Hold",
-          "patron": "Situación principal identificada (ej. Martillo en soporte + Confirmación)",
-          "razones": ["razón1 detallada", "razón2"],
+          "patron": "Explica la suma de la confluencia (Ej: Envolvente en Soporte + EMA20 a favor)",
+          "razones": ["Razón 1", "Razón 2"],
           "sl_mult": 1.5,
           "tp1_mult": 2.0,
           "trailing_mult": 1.5
         }
         """
-        user_msg = f"{descripcion}\n\nATR: {atr:.2f}. Analiza la secuencia paso a paso mentalmente, aplica los vetos, y da tu decisión."
+        user_msg = f"{descripcion}\n\nATR Actual: {atr:.2f}. Piensa como un Chartista Institucional y dicta tu veredicto."
         
         respuesta = client.chat.completions.create(
             model=MODELO_TEXTO,
             messages=[{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}],
-            temperature=0.1, # Más bajo para mayor lógica estricta
+            temperature=0.1, 
             max_tokens=400
         )
         raw = respuesta.choices[0].message.content
-        print(f"\n🔍 Groq:\n{raw}\n")
+        print(f"\n🔍 Análisis Groq:\n{raw}\n")
         
         match = re.search(r'\{.*\}', raw, re.DOTALL)
         json_str = match.group(0) if match else raw
@@ -280,17 +285,18 @@ def generar_grafico(df, decision, razones, patron, soporte, resistencia, slope, 
     ax.axhline(soporte, color='cyan', ls='--', lw=2, label=f'Soporte ({soporte:.1f})')
     ax.axhline(resistencia, color='magenta', ls='--', lw=2, label=f'Resistencia ({resistencia:.1f})')
     if 'ema20' in df_plot.columns: ax.plot(x, df_plot['ema20'], 'yellow', lw=2, label='EMA20')
+    if 'ema50' in df_plot.columns: ax.plot(x, df_plot['ema50'], 'orange', lw=1.5, ls=':', label='EMA50')
     
     if tipo == "Entrada":
         precio = df_plot['close'].iloc[-2]
         marcador = '^' if decision == 'Buy' else 'v'
         c_marcador = 'lime' if decision == 'Buy' else 'red'
         ax.scatter(len(df_plot)-2, precio + (-30 if decision=='Buy' else 30), s=400, marker=marcador, c=c_marcador, edgecolors='white', zorder=5)
-        txt = f"DECISIÓN: {decision.upper()}\nPatrón: {patron}\n" + "\n".join(razones[:2])
+        txt = f"DECISIÓN: {decision.upper()}\nContexto: {patron}\n" + "\n".join(razones[:2])
     else:
         p_ent, p_sal, win, pnl = salida_data
         ax.axhline(p_ent, color='blue', ls=':', lw=2, label=f'Entrada: {p_ent:.1f}')
-        ax.axhline(p_sal, color='orange', ls=':', lw=2, label=f'Salida: {p_sal:.1f}')
+        ax.axhline(p_sal, color='white', ls=':', lw=2, label=f'Salida: {p_sal:.1f}')
         txt = f"CIERRE: {'WIN ✅' if win else 'LOSS ❌'} | PnL: {pnl:.2f} USD"
 
     ax.text(0.01, 0.99, txt, transform=ax.transAxes, fontsize=11, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='black', alpha=0.8), color='white')
@@ -302,7 +308,7 @@ def generar_grafico(df, decision, razones, patron, soporte, resistencia, slope, 
     plt.close()
     return ruta
 
-# =================== RISK MGMT Y GESTIÓN ===================
+# =================== GESTIÓN ===================
 def risk_management_check():
     global PAPER_DAILY_START_BALANCE, PAPER_STOPPED_TODAY, PAPER_CURRENT_DAY
     hoy = datetime.now(timezone.utc).date()
@@ -321,19 +327,18 @@ def paper_abrir_posicion(decision, precio, atr, razones, patron, multis):
     
     PAPER_SL_INICIAL = precio - (atr * sl_m) if decision == "Buy" else precio + (atr * sl_m)
     PAPER_TP1 = precio + (atr * tp_m) if decision == "Buy" else precio - (atr * tp_m)
-    distancia = abs(precio - PAPER_SL_INICIAL)
-    if distancia == 0: return False
+    if abs(precio - PAPER_SL_INICIAL) == 0: return False
     
-    PAPER_SIZE_BTC = min((riesgo_usd / distancia) * precio, PAPER_BALANCE * LEVERAGE) / precio
+    PAPER_SIZE_BTC = min((riesgo_usd / abs(precio - PAPER_SL_INICIAL)) * precio, PAPER_BALANCE * LEVERAGE) / precio
     PAPER_POSICION_ACTIVA, PAPER_PRECIO_ENTRADA, PAPER_TRAILING_MULT = decision, precio, tr_m
     PAPER_SIZE_BTC_RESTANTE, PAPER_TP1_EJECUTADO, PAPER_SL_ACTUAL = PAPER_SIZE_BTC, False, PAPER_SL_INICIAL
     ULTIMOS_MULTIS = multis
     
-    telegram_mensaje(f"📌 {decision.upper()} | In: {precio:.1f} | SL: {PAPER_SL_INICIAL:.1f} | TP: {PAPER_TP1:.1f}\nMotivo: {patron}")
+    telegram_mensaje(f"📌 {decision.upper()} Ejecutado | In: {precio:.1f} | SL: {PAPER_SL_INICIAL:.1f} | TP: {PAPER_TP1:.1f}\n🔍 Contexto: {patron}")
     return True
 
 def paper_revisar_sl_tp(df, sop, res, slo, inter):
-    global PAPER_POSICION_ACTIVA, PAPER_PRECIO_ENTRADA, PAPER_SL_INICIAL, PAPER_TP1, PAPER_TRAILING_MULT, PAPER_SIZE_BTC, PAPER_SIZE_BTC_RESTANTE, PAPER_TP1_EJECUTADO, PAPER_SL_ACTUAL, PAPER_BALANCE, PAPER_PNL_PARCIAL, PAPER_WIN, PAPER_LOSS, PAPER_TRADES_TOTALES, TRADE_HISTORY
+    global PAPER_POSICION_ACTIVA, PAPER_PRECIO_ENTRADA, PAPER_SL_INICIAL, PAPER_TP1, PAPER_TRAILING_MULT, PAPER_SIZE_BTC, PAPER_SIZE_BTC_RESTANTE, PAPER_TP1_EJECUTADO, PAPER_SL_ACTUAL, PAPER_BALANCE, PAPER_PNL_PARCIAL, PAPER_WIN, PAPER_LOSS, PAPER_TRADES_TOTALES
     if not PAPER_POSICION_ACTIVA: return None
     
     h, l, c, atr = df['high'].iloc[-1], df['low'].iloc[-1], df['close'].iloc[-1], df['atr'].iloc[-1]
@@ -378,7 +383,7 @@ def paper_revisar_sl_tp(df, sop, res, slo, inter):
 # =================== LOOP PRINCIPAL ===================
 def run_bot():
     global ULTIMA_DECISION, ULTIMO_MOTIVO, ULTIMA_RAZONES, ULTIMO_PATRON
-    print("🤖 BOT V99.19 INICIADO - Nison Puro (Contexto y Vetos de IA)")
+    print("🤖 BOT V99.20 INICIADO - Nison Holístico (15+ Patrones, Contexto y Confluencia)")
     ultima_vela = None
     while True:
         try:
@@ -398,8 +403,8 @@ def run_bot():
                         ruta_img = generar_grafico(df, decision, razones, patron, sop, res, slo, inter, multis, "Entrada")
                         telegram_enviar_imagen(ruta_img, f"🚀 {decision} (Nison)\n{patron}\n{razones[0]}")
                 else:
-                    print(f"⏸️ Hold: {ULTIMO_MOTIVO}")
-                    ultima_vela = vela_cerrada # Marcar evaluada aunque sea hold
+                    print(f"⏸️ Hold: {ULTIMO_MOTIVO[:60]}...")
+                    ultima_vela = vela_cerrada
             
             if PAPER_POSICION_ACTIVA:
                 sop, res, slo, inter, _, _ = detectar_zonas_mercado(df, -1)

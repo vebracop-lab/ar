@@ -1,7 +1,6 @@
-google-genai
+groq
 requests
 pandas
 numpy
 scipy
 matplotlib
-Pillow

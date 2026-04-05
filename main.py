@@ -32,9 +32,8 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 if not GEMINI_API_KEY:
     raise ValueError("❌ Falta GEMINI_API_KEY en variables de entorno")
 
-# Cliente nuevo
 client = genai.Client(api_key=GEMINI_API_KEY)
-MODELO_VISION = "gemini-2.0-flash-exp"  # o "gemini-1.5-pro"
+MODELO_VISION = "gemini-2.0-flash"   # <--- CAMBIADO
 
 SYMBOL = "BTCUSDT"
 INTERVAL = "5"

@@ -1,9 +1,9 @@
-# BOT TRADING V100.1 – GEMINI VISION (google.genai)
-# ==================================================
-# - Usa el nuevo SDK google.genai (recomendado por Google)
-# - Análisis visual profesional de gráficos de trading
-# - Autoaprendizaje, logs detallados, gráficos en Telegram
-# ==================================================
+# BOT TRADING V99.10 – GROQ VISION (MODELO ESTABLE + AUTOAPRENDIZAJE)
+# ===================================================================
+# - Modelo: llama-3.2-90b-vision-preview (fiable)
+# - Prompt minimalista: "Mira el gráfico y decide como Steven Nison"
+# - Autoaprendizaje cada 10 trades, logs detallados, gráficos en Telegram
+# ====================================================================
 
 import os
 import time
@@ -11,6 +11,7 @@ import io
 import requests
 import json
 import re
+import base64
 import numpy as np
 import pandas as pd
 from scipy.stats import linregress
@@ -21,25 +22,23 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-from google import genai
-from google.genai import types
-from PIL import Image
+from groq import Groq
 
 # ======================================================
 # CONFIGURACIÓN GENERAL
 # ======================================================
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-if not GEMINI_API_KEY:
-    raise ValueError("❌ Falta GEMINI_API_KEY en variables de entorno")
-
-client = genai.Client(api_key=GEMINI_API_KEY)
-MODELO_VISION = "gemini-2.0-flash"   # <--- CAMBIADO
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+if not GROQ_API_KEY:
+    raise ValueError("❌ Falta GROQ_API_KEY en variables de entorno")
+client = Groq(api_key=GROQ_API_KEY)
+# Usar un modelo de visión estable
+MODELO_VISION = "llama-3.2-90b-vision-preview"  # alternativo: "llama-3.2-11b-vision-preview"
 
 SYMBOL = "BTCUSDT"
 INTERVAL = "5"
 RISK_PER_TRADE = 0.02
 LEVERAGE = 10
-SLEEP_SECONDS = 45
+SLEEP_SECONDS = 60  # Aumentado a 60s para no saturar cuota Groq
 GRAFICO_VELAS_LIMIT = 120
 
 DEFAULT_SL_MULT = 1.5
@@ -48,7 +47,7 @@ DEFAULT_TRAILING_MULT = 1.8
 PORCENTAJE_CIERRE_TP1 = 0.5
 
 # ======================================================
-# PAPER TRADING (SIMULADO) – mismo que antes
+# PAPER TRADING (SIMULADO)
 # ======================================================
 PAPER_BALANCE_INICIAL = 100.0
 PAPER_BALANCE = PAPER_BALANCE_INICIAL
@@ -155,7 +154,7 @@ def detectar_zonas_mercado(df, idx=-2, ventana_macro=120):
     return soporte_horiz, resistencia_horiz, slope, intercept, tendencia_macro
 
 # ======================================================
-# AUTOAPRENDIZAJE (cada 10 trades)
+# AUTOAPRENDIZAJE
 # ======================================================
 def aprender_de_trades():
     global ADAPTIVE_BIAS, ADAPTIVE_SL_MULT, ADAPTIVE_TP1_MULT, ADAPTIVE_TRAILING_MULT
@@ -199,40 +198,55 @@ def aprender_de_trades():
     ULTIMO_APRENDIZAJE = len(TRADE_HISTORY)
 
 # ======================================================
-# ANÁLISIS CON GEMINI usando google.genai
+# ANÁLISIS CON GROQ VISION (PROMPT LIBRE)
 # ======================================================
-def analizar_con_gemini(ruta_imagen):
+def limpiar_respuesta_json(texto):
+    match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', texto, re.DOTALL)
+    if match:
+        return match.group(1)
+    match = re.search(r'\{.*\}', texto, re.DOTALL)
+    if match:
+        return match.group(0)
+    return texto
+
+def analizar_con_groq(ruta_imagen):
     try:
-        img = Image.open(ruta_imagen)
+        with open(ruta_imagen, "rb") as img_file:
+            imagen_base64 = base64.b64encode(img_file.read()).decode("utf-8")
 
         prompt = """
-        Eres Steven Nison, el mayor experto en velas japonesas y análisis técnico.
-        Analiza el gráfico de BTCUSDT en 5 minutos como si lo vieras en tiempo real.
-        Evalúa tendencia, velas, EMA20, soportes/resistencias y patrones.
-        Decide si comprar (Buy), vender (Sell) o esperar (Hold).
-        Responde ÚNICAMENTE con un JSON en este formato exacto:
+        Eres Steven Nison, el mayor experto mundial en velas japonesas y análisis técnico.
+        Mira atentamente el gráfico de BTCUSDT en 5 minutos.
+        Analiza la imagen en su totalidad (velas, tendencia, EMA20, soportes/resistencias, patrones) y decide si debes comprar (Buy), vender (Sell) o esperar (Hold).
+        Responde ÚNICAMENTE con un JSON válido en este formato:
         {
           "decision": "Buy/Sell/Hold",
-          "patron": "nombre del patrón o situación",
+          "patron": "nombre del patrón o situación clave",
           "razones": ["razón1", "razón2", "razón3"]
         }
-        No incluyas texto adicional fuera del JSON.
+        No incluyas texto fuera del JSON. Sé directo.
         """
 
-        # Usar el nuevo cliente
-        response = client.models.generate_content(
+        respuesta = client.chat.completions.create(
             model=MODELO_VISION,
-            contents=[prompt, img]
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{imagen_base64}"}}
+                    ]
+                }
+            ],
+            temperature=0.3,
+            max_tokens=300
         )
-        raw = response.text
-        print(f"🔍 Respuesta Gemini:\n{raw}")
 
-        # Limpiar posibles marcadores
-        match = re.search(r'\{.*\}', raw, re.DOTALL)
-        if match:
-            datos = json.loads(match.group(0))
-        else:
-            datos = json.loads(raw)
+        raw = respuesta.choices[0].message.content
+        print(f"🔍 Respuesta Groq:\n{raw}")
+
+        cleaned = limpiar_respuesta_json(raw)
+        datos = json.loads(cleaned)
 
         decision = datos.get("decision", "Hold")
         patron = datos.get("patron", "Patrón técnico")
@@ -245,11 +259,11 @@ def analizar_con_gemini(ruta_imagen):
         return decision, razones, patron, raw
 
     except Exception as e:
-        print(f"❌ Error en Gemini: {e}")
+        print(f"❌ Error en Groq: {e}")
         return "Hold", ["Error en análisis"], "Error API", ""
 
 # ======================================================
-# GRÁFICOS (completos)
+# GRÁFICOS (igual que antes)
 # ======================================================
 def generar_grafico_entrada(df, decision, razones, patron, soporte, resistencia, slope, intercept):
     df_plot = df.tail(GRAFICO_VELAS_LIMIT).copy()
@@ -275,7 +289,7 @@ def generar_grafico_entrada(df, decision, razones, patron, soporte, resistencia,
     if 'ema20' in df_plot.columns:
         ax.plot(x, df_plot['ema20'], 'y', lw=2, label='EMA20')
 
-    texto_ia = f"GEMINI VISION V100.1 | Decisión: {decision.upper()}\nPatrón: {patron[:70]}\n"
+    texto_ia = f"GROQ VISION V99.10 | Decisión: {decision.upper()}\nPatrón: {patron[:70]}\n"
     texto_ia += "Razones:\n" + "\n".join(razones[:3])
     ax.text(0.01, 0.99, texto_ia, transform=ax.transAxes, fontsize=10,
             verticalalignment='top', bbox=dict(boxstyle='round', facecolor='black', alpha=0.85),
@@ -519,8 +533,8 @@ def run_bot():
     global ULTIMA_DECISION, ULTIMO_MOTIVO, ULTIMA_RAZONES, ULTIMO_PATRON
     global ADAPTIVE_BIAS, ADAPTIVE_SL_MULT, ADAPTIVE_TP1_MULT, ADAPTIVE_TRAILING_MULT
 
-    print("🤖 BOT V100.1 INICIADO - GEMINI VISION (google.genai)")
-    telegram_mensaje("🤖 BOT V100.1 INICIADO: Gemini 2.0 Flash analiza el gráfico como Steven Nison.")
+    print("🤖 BOT V99.10 INICIADO - GROQ VISION (modelo estable, prompt libre)")
+    telegram_mensaje("🤖 BOT V99.10 INICIADO: Análisis visual con Groq (llama-3.2-90b-vision-preview).")
     ultima_vela_operada = None
 
     while True:
@@ -536,7 +550,6 @@ def run_bot():
             drawdown = (PAPER_BALANCE - PAPER_DAILY_START_BALANCE) / PAPER_DAILY_START_BALANCE * 100
             winrate = (PAPER_WIN / PAPER_TRADES_TOTALES) * 100 if PAPER_TRADES_TOTALES > 0 else 0
 
-            # Heartbeat en consola
             print(f"\n{'='*60}")
             print(f"💓 HEARTBEAT - {datetime.now(timezone.utc).strftime('%H:%M:%S')}")
             print(f"💰 Precio: {precio_mercado:.2f} | ATR: {atr_actual:.2f}")
@@ -551,9 +564,9 @@ def run_bot():
 
             if PAPER_POSICION_ACTIVA is None and ultima_vela_operada != tiempo_vela_cerrada:
                 ruta_temp = generar_grafico_entrada(df, "Hold", ["Analizando..."], "Esperando", soporte, resistencia, slope, intercept)
-                decision, razones, patron, raw = analizar_con_gemini(ruta_temp)
+                decision, razones, patron, raw = analizar_con_groq(ruta_temp)
 
-                print(f"📊 Decisión Gemini: {decision}")
+                print(f"📊 Decisión Groq: {decision}")
                 print(f"📌 Patrón: {patron}")
                 print("📝 Razones:")
                 for r in razones:
@@ -568,7 +581,7 @@ def run_bot():
                     if paper_abrir_posicion(decision, precio_mercado, atr_actual, razones, patron):
                         ultima_vela_operada = tiempo_vela_cerrada
                         ruta_entrada = generar_grafico_entrada(df, decision, razones, patron, soporte, resistencia, slope, intercept)
-                        caption = f"🚀 Señal {decision.upper()} (Gemini)\nPatrón: {patron}\n" + "\n".join(razones[:2])
+                        caption = f"🚀 Señal {decision.upper()} (Groq)\nPatrón: {patron}\n" + "\n".join(razones[:2])
                         telegram_enviar_imagen(ruta_entrada, caption=caption)
                 else:
                     print(f"⏸️ Hold: {ULTIMO_MOTIVO}")

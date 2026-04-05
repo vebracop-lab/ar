@@ -1,9 +1,5 @@
-# BOT TRADING V99.15 – GROQ con interpretación CORRECTA de mechas (Nison)
-# ==========================================================================
-# - Corrección: mecha inferior larga = soporte (alcista), mecha superior larga = resistencia (bajista)
-# - Prioriza ruptura de tendencia + confluencia de señales
-# ==========================================================================
-
+# BOT TRADING V99.16 – GROQ con interpretación CORRECTA de mechas + manejo robusto de JSON
+# ========================================================================================
 import os, time, requests, json, re, numpy as np, pandas as pd
 from scipy.stats import linregress
 from datetime import datetime, timezone
@@ -13,7 +9,6 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from groq import Groq
 
-# =================== CONFIGURACIÓN ===================
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 if not GROQ_API_KEY:
     raise ValueError("Falta GROQ_API_KEY")
@@ -91,7 +86,7 @@ def telegram_enviar_imagen(ruta_imagen, caption=""):
     except Exception as e:
         print(f"Error imagen: {e}")
 
-# =================== DATOS Y TÉCNICO ===================
+# =================== DATOS ===================
 def obtener_velas(limit=150):
     r = requests.get(f"{BASE_URL}/v5/market/kline", params={"category": "linear", "symbol": SYMBOL, "interval": INTERVAL, "limit": limit}, timeout=20)
     data = r.json()["result"]["list"][::-1]
@@ -132,7 +127,7 @@ def detectar_zonas_mercado(df, idx=-2, ventana_macro=120):
     tendencia = 'ALCISTA' if slope > 0.01 else 'BAJISTA' if slope < -0.01 else 'LATERAL'
     return soporte, resistencia, slope, intercept, tendencia
 
-# =================== ANÁLISIS DE VELAS (estilo Nison) ===================
+# =================== ANÁLISIS DE VELAS ===================
 def analizar_anatomia_vela(open_, high, low, close):
     cuerpo = abs(close - open_)
     rango = high - low
@@ -144,7 +139,6 @@ def analizar_anatomia_vela(open_, high, low, close):
     sombra_sup_pct = (sombra_sup / rango) * 100
     sombra_inf_pct = (sombra_inf / rango) * 100
     es_verde = close >= open_
-    # Clasificación según Nison
     if cuerpo_pct < 10:
         patron = "DOJI (indecisión)"
     elif es_verde and sombra_inf_pct > 60 and cuerpo_pct < 30 and sombra_sup_pct < 10:
@@ -175,7 +169,6 @@ def detectar_patrones_multiples(df, idx):
         return "TRES CUERVOS NEGROS (fuerte continuación bajista)"
     return ""
 
-# =================== DESCRIPCIÓN TEXTUAL (Nison) con énfasis en mechas ===================
 def generar_descripcion_nison(df, idx=-2):
     precio = df['close'].iloc[idx]
     atr = df['atr'].iloc[idx]
@@ -208,14 +201,13 @@ def generar_descripcion_nison(df, idx=-2):
         patron, anatomia = analizar_anatomia_vela(v['open'], v['high'], v['low'], v['close'])
         velas_analisis.append(f"Vela {i+1}: {patron} | {anatomia} | Cierre: {v['close']:.2f}")
     
-    # Destacar mechas largas recientes
     mechas_inf_largas = sum(1 for v in df.iloc[-6:-1] if ((min(v['close'], v['open']) - v['low']) / (v['high']-v['low']) > 0.5) if (v['high']-v['low']) > 0)
     mechas_sup_largas = sum(1 for v in df.iloc[-6:-1] if ((v['high'] - max(v['close'], v['open'])) / (v['high']-v['low']) > 0.5) if (v['high']-v['low']) > 0)
     alerta_mechas = ""
     if mechas_inf_largas >= 2:
-        alerta_mechas += "⚠️ Se detectaron MECHAS INFERIORES LARGAS en las últimas velas → Rechazo de precios bajos (presión compradora, ALCISTA). "
+        alerta_mechas += "⚠️ MECHAS INFERIORES LARGAS detectadas → presión compradora (ALCISTA). "
     if mechas_sup_largas >= 2:
-        alerta_mechas += "⚠️ Se detectaron MECHAS SUPERIORES LARGAS en las últimas velas → Rechazo de precios altos (presión vendedora, BAJISTA). "
+        alerta_mechas += "⚠️ MECHAS SUPERIORES LARGAS detectadas → presión vendedora (BAJISTA). "
     
     patron_multiple = detectar_patrones_multiples(df, idx)
     if patron_multiple:
@@ -266,7 +258,7 @@ VELAS (últimas 8):
 """
     return descripcion, atr
 
-# =================== IA GROQ (sugiere SL/TP) con PROMPT CORREGIDO ===================
+# =================== IA GROQ CORREGIDA ===================
 def analizar_con_groq_texto(descripcion, atr):
     try:
         system_msg = """
@@ -313,10 +305,24 @@ def analizar_con_groq_texto(descripcion, atr):
         raw = respuesta.choices[0].message.content
         print(f"🔍 Respuesta Groq:\n{raw}")
         match = re.search(r'\{.*\}', raw, re.DOTALL)
-        datos = json.loads(match.group(0) if match else raw)
+        if match:
+            json_str = match.group(0)
+        else:
+            json_str = raw
+        try:
+            datos = json.loads(json_str)
+        except json.JSONDecodeError as e:
+            print(f"Error decodificando JSON: {e}. Intentando limpiar...")
+            json_str_clean = re.sub(r'[\x00-\x1f\x7f]', '', json_str)
+            datos = json.loads(json_str_clean)
+        if not isinstance(datos, dict):
+            print(f"Error: datos no es dict, es {type(datos)}. Valor: {datos}")
+            datos = {}
         decision = datos.get("decision", "Hold")
         patron = datos.get("patron", "")
         razones = datos.get("razones", [])
+        if not isinstance(razones, list):
+            razones = [str(razones)]
         sl_mult = float(datos.get("sl_mult", DEFAULT_SL_MULT))
         tp1_mult = float(datos.get("tp1_mult", DEFAULT_TP1_MULT))
         trailing_mult = float(datos.get("trailing_mult", DEFAULT_TRAILING_MULT))
@@ -326,9 +332,11 @@ def analizar_con_groq_texto(descripcion, atr):
         return decision, razones, patron, (sl_mult, tp1_mult, trailing_mult), raw
     except Exception as e:
         print(f"Error Groq: {e}")
+        import traceback
+        traceback.print_exc()
         return "Hold", ["Error"], "", (DEFAULT_SL_MULT, DEFAULT_TP1_MULT, DEFAULT_TRAILING_MULT), ""
 
-# =================== GRÁFICOS (sin cambios) ===================
+# =================== GRÁFICOS ===================
 def generar_grafico_entrada(df, decision, razones, patron, soporte, resistencia, slope, intercept, multiplicadores):
     df_plot = df.tail(GRAFICO_VELAS_LIMIT).copy()
     x = np.arange(len(df_plot))
@@ -344,7 +352,7 @@ def generar_grafico_entrada(df, decision, razones, patron, soporte, resistencia,
     if 'ema20' in df_plot.columns:
         ax.plot(x, df_plot['ema20'], 'y', label='EMA20')
     sl_m, tp1_m, trail_m = multiplicadores
-    texto = f"GROQ V99.15 | Decisión: {decision.upper()}\nPatrón: {patron[:70]}\nSL mult: {sl_m:.2f} | TP1 mult: {tp1_m:.2f} | Trail mult: {trail_m:.2f}\nRazones:\n" + "\n".join(razones[:3])
+    texto = f"GROQ V99.16 | Decisión: {decision.upper()}\nPatrón: {patron[:70]}\nSL mult: {sl_m:.2f} | TP1 mult: {tp1_m:.2f} | Trail mult: {trail_m:.2f}\nRazones:\n" + "\n".join(razones[:3])
     ax.text(0.01, 0.99, texto, transform=ax.transAxes, fontsize=10, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='black', alpha=0.85), color='white')
     entrada_x = len(df_plot)-2
     precio_entrada = df_plot['close'].iloc[-2]
@@ -407,7 +415,7 @@ def aprender_de_trades():
     print(msg)
     ULTIMO_APRENDIZAJE = len(TRADE_HISTORY)
 
-# =================== GESTIÓN DE RIESGO (igual) ===================
+# =================== GESTIÓN DE RIESGO ===================
 def risk_management_check():
     global PAPER_DAILY_START_BALANCE, PAPER_STOPPED_TODAY, PAPER_CURRENT_DAY, PAPER_BALANCE
     hoy = datetime.now(timezone.utc).date()
@@ -534,8 +542,8 @@ def paper_revisar_sl_tp(df, soporte, resistencia, slope, intercept):
 # =================== LOOP PRINCIPAL ===================
 def run_bot():
     global ULTIMA_DECISION, ULTIMO_MOTIVO, ULTIMA_RAZONES, ULTIMO_PATRON, ULTIMOS_MULTIS
-    print("🤖 BOT V99.15 INICIADO - Corrección de mechas (Nison) + interpretación contextual")
-    telegram_mensaje("🤖 BOT V99.15 INICIADO - Análisis de velas con énfasis en mechas largas y confluencia")
+    print("🤖 BOT V99.16 INICIADO - Corrección de mechas + JSON robusto")
+    telegram_mensaje("🤖 BOT V99.16 INICIADO - Análisis Nison con manejo de errores")
     ultima_vela = None
     while True:
         try:
@@ -566,6 +574,8 @@ def run_bot():
             time.sleep(SLEEP_SECONDS)
         except Exception as e:
             print(f"❌ ERROR: {e}")
+            import traceback
+            traceback.print_exc()
             time.sleep(60)
 
 if __name__ == '__main__':

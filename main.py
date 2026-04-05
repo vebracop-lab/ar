@@ -1,4 +1,10 @@
-# BOT TRADING V99.17 – Corregido error de iteración en DataFrame
+# BOT TRADING V99.18 – GROQ (STEVE NISON COMPLETO: PATRONES, ESTRUCTURA, CONTINUACIÓN)
+# ====================================================================================
+# - Detecta patrones de velas: Doji, Martillo, Estrella fugaz, Envolvente, Tres soldados, etc.
+# - Interpreta confluencia con soportes/resistencias, EMA, tendencia, rupturas.
+# - Sugiere SL/TP adaptados al contexto y timeframe 5m.
+# - Autoaprendizaje y logs completos.
+
 import os, time, requests, json, re, numpy as np, pandas as pd
 from scipy.stats import linregress
 from datetime import datetime, timezone
@@ -85,7 +91,7 @@ def telegram_enviar_imagen(ruta_imagen, caption=""):
     except Exception as e:
         print(f"Error imagen: {e}")
 
-# =================== DATOS ===================
+# =================== DATOS Y TÉCNICO ===================
 def obtener_velas(limit=150):
     r = requests.get(f"{BASE_URL}/v5/market/kline", params={"category": "linear", "symbol": SYMBOL, "interval": INTERVAL, "limit": limit}, timeout=20)
     data = r.json()["result"]["list"][::-1]
@@ -126,48 +132,79 @@ def detectar_zonas_mercado(df, idx=-2, ventana_macro=120):
     tendencia = 'ALCISTA' if slope > 0.01 else 'BAJISTA' if slope < -0.01 else 'LATERAL'
     return soporte, resistencia, slope, intercept, tendencia
 
-# =================== ANÁLISIS DE VELAS ===================
-def analizar_anatomia_vela(open_, high, low, close):
+# =================== PATRONES DE VELAS (NISON) ===================
+def detectar_patron_vela(open_, high, low, close):
+    """Retorna (nombre_patron, tipo: 'alcista', 'bajista', 'indecision', 'continuacion') y descripción"""
     cuerpo = abs(close - open_)
     rango = high - low
     if rango == 0:
-        return "Vela indeterminada", "Cuerpo: 0, Sombras: ninguna"
+        return "Vela indeterminada", "neutral", "Rango cero"
     cuerpo_pct = (cuerpo / rango) * 100
     sombra_sup = high - max(close, open_)
     sombra_inf = min(close, open_) - low
     sombra_sup_pct = (sombra_sup / rango) * 100
     sombra_inf_pct = (sombra_inf / rango) * 100
     es_verde = close >= open_
+
+    # Patrones de indecisión
     if cuerpo_pct < 10:
-        patron = "DOJI (indecisión)"
-    elif es_verde and sombra_inf_pct > 60 and cuerpo_pct < 30 and sombra_sup_pct < 10:
-        patron = "MARTILLO (reversión alcista)"
-    elif not es_verde and sombra_sup_pct > 60 and cuerpo_pct < 30 and sombra_inf_pct < 10:
-        patron = "ESTRELLA FUGAZ (reversión bajista)"
-    elif not es_verde and sombra_inf_pct > 60 and cuerpo_pct < 30 and sombra_sup_pct < 10:
-        patron = "HOMBRE COLGADO (reversión bajista)"
-    elif cuerpo_pct > 70 and sombra_sup_pct < 15 and sombra_inf_pct < 15:
-        patron = "VELA LARGA SIN MECHAS (fuerte impulso)"
-    elif sombra_sup_pct > 50 and cuerpo_pct < 50:
-        patron = "RECHAZO EN RESISTENCIA (mecha superior larga) → BAJISTA"
-    elif sombra_inf_pct > 50 and cuerpo_pct < 50:
-        patron = "REBOTE EN SOPORTE (mecha inferior larga) → ALCISTA"
-    else:
-        patron = f"Vela normal ({cuerpo_pct:.0f}% cuerpo)"
-    anatomia = f"Cuerpo: {cuerpo_pct:.1f}% | Sombra sup: {sombra_sup_pct:.1f}% | Sombra inf: {sombra_inf_pct:.1f}%"
-    return patron, anatomia
+        return "DOJI", "indecision", f"Cuerpo {cuerpo_pct:.1f}%, sombras iguales"
+
+    # Patrones de reversión alcista
+    if es_verde and sombra_inf_pct > 60 and cuerpo_pct < 30 and sombra_sup_pct < 10:
+        return "MARTILLO", "alcista", "Mecha inferior larga, cuerpo pequeño arriba, rebote en soporte"
+    if not es_verde and sombra_sup_pct > 60 and cuerpo_pct < 30 and sombra_inf_pct < 10:
+        return "ESTRELLA FUGAZ", "bajista", "Mecha superior larga, cuerpo pequeño abajo, rechazo en resistencia"
+    if not es_verde and sombra_inf_pct > 60 and cuerpo_pct < 30 and sombra_sup_pct < 10:
+        return "HOMBRE COLGADO", "bajista", "Mecha inferior larga en vela roja, señal de agotamiento alcista"
+    
+    # Patrones de continuación (vela larga sin mechas)
+    if cuerpo_pct > 70 and sombra_sup_pct < 15 and sombra_inf_pct < 15:
+        if es_verde:
+            return "VELA LARGA ALCISTA", "continuacion_alcista", "Fuerte presión compradora"
+        else:
+            return "VELA LARGA BAJISTA", "continuacion_bajista", "Fuerte presión vendedora"
+    
+    # Rechazo / rebote (no necesariamente patrón clásico pero útil)
+    if sombra_sup_pct > 50 and cuerpo_pct < 50:
+        return "RECHAZO EN RESISTENCIA", "bajista", "Mecha superior larga, probable venta"
+    if sombra_inf_pct > 50 and cuerpo_pct < 50:
+        return "REBOTE EN SOPORTE", "alcista", "Mecha inferior larga, probable compra"
+    
+    return "VELA NORMAL", "neutral", f"Cuerpo {cuerpo_pct:.0f}%"
+
+def detectar_patron_envolvente(df, idx):
+    """Detecta patrón envolvente alcista o bajista en la última vela cerrada y la anterior"""
+    if idx < 1: return None
+    vela1 = df.iloc[idx-1]  # anterior
+    vela2 = df.iloc[idx]    # actual (última cerrada)
+    cuerpo1 = vela1['close'] - vela1['open']
+    cuerpo2 = vela2['close'] - vela2['open']
+    # Envolvente alcista: vela actual verde que envuelve completamente a la vela anterior roja
+    if cuerpo2 > 0 and cuerpo1 < 0:
+        if vela2['open'] < vela1['close'] and vela2['close'] > vela1['open']:
+            return "ENVOLVENTE ALCISTA", "alcista", "Vela verde envuelve vela roja anterior, reversión alcista"
+    # Envolvente bajista: vela actual roja que envuelve a la anterior verde
+    if cuerpo2 < 0 and cuerpo1 > 0:
+        if vela2['open'] > vela1['close'] and vela2['close'] < vela1['open']:
+            return "ENVOLVENTE BAJISTA", "bajista", "Vela roja envuelve vela verde anterior, reversión bajista"
+    return None
 
 def detectar_patrones_multiples(df, idx):
-    if idx < 3: return ""
+    """Tres soldados blancos / tres cuervos negros (continuación)"""
+    if idx < 2: return None
     ultimas = df.iloc[idx-2:idx+1]
     colores = ['VERDE' if c >= o else 'ROJA' for o, c in zip(ultimas['open'], ultimas['close'])]
     cuerpos = [abs(c - o) for o, c in zip(ultimas['open'], ultimas['close'])]
+    # Tres soldados blancos: 3 velas verdes consecutivas con cuerpos crecientes
     if all(c == 'VERDE' for c in colores) and cuerpos[-1] > cuerpos[-2] > cuerpos[-3]:
-        return "TRES SOLDADOS BLANCOS (fuerte continuación alcista)"
+        return "TRES SOLDADOS BLANCOS", "continuacion_alcista", "Fuerte continuación alcista"
+    # Tres cuervos negros: 3 velas rojas consecutivas con cuerpos crecientes
     if all(c == 'ROJA' for c in colores) and cuerpos[-1] > cuerpos[-2] > cuerpos[-3]:
-        return "TRES CUERVOS NEGROS (fuerte continuación bajista)"
-    return ""
+        return "TRES CUERVOS NEGROS", "continuacion_bajista", "Fuerte continuación bajista"
+    return None
 
+# =================== DESCRIPCIÓN TEXTUAL ENRIQUECIDA ===================
 def generar_descripcion_nison(df, idx=-2):
     precio = df['close'].iloc[idx]
     atr = df['atr'].iloc[idx]
@@ -194,37 +231,41 @@ def generar_descripcion_nison(df, idx=-2):
     else:
         rol_ema = "⚠️ EMA20 sin rol claro"
     
-    # Analizar velas correctamente usando iterrows()
-    velas_analisis = []
-    for i in range(max(0, len(df)-9), len(df)-1):
-        v = df.iloc[i]
-        patron, anatomia = analizar_anatomia_vela(v['open'], v['high'], v['low'], v['close'])
-        velas_analisis.append(f"Vela {i+1}: {patron} | {anatomia} | Cierre: {v['close']:.2f}")
+    # Análisis de velas individuales (últimas 8)
+    velas_info = []
+    for i, v in df.iloc[max(0, len(df)-9):-1].iterrows():
+        patron, tipo, desc = detectar_patron_vela(v['open'], v['high'], v['low'], v['close'])
+        velas_info.append(f"{i.strftime('%H:%M')}: {patron} ({tipo}) - {desc} | Cierre {v['close']:.2f}")
     
-    # Detección de mechas largas en las últimas 6 velas
-    mechas_inf_largas = 0
-    mechas_sup_largas = 0
-    for i in range(max(0, len(df)-6), len(df)-1):
-        v = df.iloc[i]
-        rango = v['high'] - v['low']
+    # Patrón envolvente (última vela cerrada con la anterior)
+    env = detectar_patron_envolvente(df, idx)
+    if env:
+        velas_info.append(f"✨ PATRÓN ENVOLVENTE: {env[0]} - {env[2]}")
+    
+    # Patrones múltiples (tres soldados, tres cuervos)
+    multi = detectar_patrones_multiples(df, idx)
+    if multi:
+        velas_info.append(f"✨ PATRÓN MÚLTIPLE: {multi[0]} - {multi[2]}")
+    
+    # Detección de mechas largas en últimas 5 velas (corregido)
+    mechas_inf = 0
+    mechas_sup = 0
+    for _, row in df.iloc[-6:-1].iterrows():
+        rango = row['high'] - row['low']
         if rango > 0:
-            sombra_inf_pct = (min(v['close'], v['open']) - v['low']) / rango * 100
-            sombra_sup_pct = (v['high'] - max(v['close'], v['open'])) / rango * 100
-            if sombra_inf_pct > 50:
-                mechas_inf_largas += 1
-            if sombra_sup_pct > 50:
-                mechas_sup_largas += 1
+            som_inf = (min(row['close'], row['open']) - row['low']) / rango
+            som_sup = (row['high'] - max(row['close'], row['open'])) / rango
+            if som_inf > 0.5:
+                mechas_inf += 1
+            if som_sup > 0.5:
+                mechas_sup += 1
     alerta_mechas = ""
-    if mechas_inf_largas >= 2:
-        alerta_mechas += "⚠️ MECHAS INFERIORES LARGAS detectadas → presión compradora (ALCISTA). "
-    if mechas_sup_largas >= 2:
-        alerta_mechas += "⚠️ MECHAS SUPERIORES LARGAS detectadas → presión vendedora (BAJISTA). "
+    if mechas_inf >= 2:
+        alerta_mechas += f"⚠️ {mechas_inf} velas con MECHA INFERIOR LARGA (soporte, presión compradora → ALCISTA). "
+    if mechas_sup >= 2:
+        alerta_mechas += f"⚠️ {mechas_sup} velas con MECHA SUPERIOR LARGA (resistencia, presión vendedora → BAJISTA). "
     
-    patron_multiple = detectar_patrones_multiples(df, idx)
-    if patron_multiple:
-        velas_analisis.append(f"✨ PATRÓN MÚLTIPLE: {patron_multiple}")
-    
-    # Rechazos en soporte/resistencia
+    # Estructura de mercado (rechazos en S/R)
     df_cercano = df.iloc[-20:]
     toques_res = sum(1 for _, v in df_cercano.iterrows() if v['high'] >= resistencia * 0.998)
     toques_sop = sum(1 for _, v in df_cercano.iterrows() if v['low'] <= soporte * 1.002)
@@ -234,6 +275,7 @@ def generar_descripcion_nison(df, idx=-2):
     if toques_sop >= 3:
         estructura += f"✅ SOPORTE ({soporte:.0f}) PROBADO {toques_sop} VECES (SUELO SÓLIDO) → ALCISTA. "
     
+    # Ruptura de tendencia
     ruptura = ""
     if len(df) > 20:
         pend_reciente, _, _, _, _ = linregress(np.arange(20), df['close'].iloc[-20:].values)
@@ -242,6 +284,7 @@ def generar_descripcion_nison(df, idx=-2):
         elif slope < 0 and pend_reciente > 0:
             ruptura = "✅ RUPTURA DE TENDENCIA BAJISTA (pendiente reciente positiva) → ALCISTA"
     
+    # RSI y MACD
     if rsi > 70: rsi_texto = "SOBRECOMPRADO (>70) → posible BAJISTA"
     elif rsi < 30: rsi_texto = "SOBREVENDIDO (<30) → posible ALCISTA"
     else: rsi_texto = f"NEUTRAL ({rsi:.1f})"
@@ -254,7 +297,7 @@ def generar_descripcion_nison(df, idx=-2):
         macd_texto = "NEUTRAL"
     
     descripcion = f"""
-=== ANÁLISIS NISON – BTCUSDT 5m ===
+=== ANÁLISIS STEVE NISON – BTCUSDT 5m ===
 Precio: {precio:.2f} | ATR: {atr:.2f}
 Tendencia macro: {tendencia} (pendiente {slope:.6f})
 {ruptura}
@@ -265,45 +308,38 @@ MACD: {macd_texto} (hist {hist:.2f})
 Soporte: {soporte:.2f} | Resistencia: {resistencia:.2f}
 {estructura}
 {alerta_mechas}
-VELAS (últimas 8):
-{chr(10).join(velas_analisis)}
+PATRONES DE VELAS (últimas 8):
+{chr(10).join(velas_info)}
 """
     return descripcion, atr
 
-# =================== IA GROQ (corregida) ===================
+# =================== IA GROQ (PROMPT MEJORADO) ===================
 def analizar_con_groq_texto(descripcion, atr):
     try:
         system_msg = """
-        Eres Steve Nison, el mayor experto en velas japonesas y análisis técnico.
-        Tu interpretación de las velas es la siguiente:
-        - Si una vela tiene una MECHA INFERIOR LARGA (sombra larga hacia abajo) y cierra cerca del máximo, indica que los compradores rechazaron los precios bajos → señal ALCISTA (BUY).
-        - Si una vela tiene una MECHA SUPERIOR LARGA (sombra larga hacia arriba) y cierra cerca del mínimo, indica que los vendedores rechazaron los precios altos → señal BAJISTA (SELL).
-        - Un patrón de MÚLTIPLES MECHAS INFERIORES LARGAS en velas consecutivas es una fuerte señal de soporte y presión compradora.
-        - Si el precio rompe una línea de tendencia alcista desde abajo hacia arriba y además hay mechas inferiores largas, es una señal de continuación alcista, NO de reversión.
-        - No confundas un rebote en soporte (mecha inferior larga) con un rechazo en resistencia.
+Eres Steve Nison, el mayor experto mundial en velas japonesas y análisis técnico.
+Tu conocimiento incluye patrones de reversión (martillo, estrella fugaz, hombre colgado, envolvente), patrones de continuación (tres soldados blancos, tres cuervos negros, velas largas sin mechas), patrones de indecisión (doji), y estructura de mercado (soportes/resistencias, tendencia, rupturas).
+Interpreta TODO el contexto que se te proporciona: velas individuales, patrones múltiples, mechas largas, toques en EMA, rechazos en niveles, RSI, MACD, ruptura de tendencia.
 
-        Analiza TODO el contexto: velas, tendencia, EMA, soportes/resistencias, RSI, MACD.
-        Si hay al menos DOS SEÑALES A FAVOR (ej. ruptura de tendencia alcista + mechas inferiores largas + precio sobre EMA), toma posición BUY.
-        Si hay señales bajistas convergentes (ej. techo sólido + mechas superiores largas + precio bajo EMA), toma SELL.
-        Si no hay claridad, HOLD.
+REGLAS PARA DECIDIR (Buy/Sell/Hold):
+- Si ves un PATRÓN DE REVERSIÓN ALCISTA (martillo, envolvente alcista, rebote en soporte) Y el precio está en una zona de soporte (horizontal, EMA o línea de tendencia) → BUY.
+- Si ves un PATRÓN DE REVERSIÓN BAJISTA (estrella fugaz, hombre colgado, envolvente bajista, rechazo en resistencia) Y el precio está en resistencia → SELL.
+- Si ves PATRONES DE CONTINUACIÓN (tres soldados blancos, velas largas alcistas) en una tendencia alcista → BUY. Si son bajistas en tendencia bajista → SELL.
+- Si hay CONFLUENCIA de señales (ej. martillo + soporte + RSI sobrevendido) → mayor convicción.
+- Si el mercado está lateral y no hay patrones claros, o las señales son contradictorias → HOLD.
+- Además, sugiere multiplicadores SL, TP1 y Trailing basados en el ATR y la volatilidad actual, teniendo en cuenta que es gráfico de 5 minutos (rangos conservadores: SL 1.0-2.0, TP1 1.2-2.5, Trailing 1.2-2.0).
 
-        Además, sugiere multiplicadores para Stop Loss (SL), Take Profit 1 (TP1) y Trailing Stop.
-        Considera que es gráfico de 5 minutos: rangos razonables:
-        - SL: 1.0 - 2.0 x ATR
-        - TP1: 1.2 - 2.5 x ATR
-        - Trailing: 1.2 - 2.0 x ATR
-
-        Responde ÚNICAMENTE con JSON en este formato:
-        {
-          "decision": "Buy/Sell/Hold",
-          "patron": "nombre del patrón o situación",
-          "razones": ["razón1","razón2","razón3"],
-          "sl_mult": 1.5,
-          "tp1_mult": 1.8,
-          "trailing_mult": 1.6
-        }
-        Si es Hold, los multiplicadores pueden ser los valores por defecto.
-        """
+Responde ÚNICAMENTE con un JSON válido en este formato:
+{
+  "decision": "Buy/Sell/Hold",
+  "patron": "nombre del patrón o situación clave",
+  "razones": ["razón1","razón2","razón3"],
+  "sl_mult": 1.5,
+  "tp1_mult": 1.8,
+  "trailing_mult": 1.6
+}
+No incluyas texto adicional fuera del JSON.
+"""
         user_msg = f"{descripcion}\nATR actual: {atr:.2f}\n\nRecomienda multiplicadores realistas para 5m."
         respuesta = client.chat.completions.create(
             model=MODELO_TEXTO,
@@ -348,7 +384,7 @@ def analizar_con_groq_texto(descripcion, atr):
         traceback.print_exc()
         return "Hold", ["Error"], "", (DEFAULT_SL_MULT, DEFAULT_TP1_MULT, DEFAULT_TRAILING_MULT), ""
 
-# =================== GRÁFICOS ===================
+# =================== GRÁFICOS (sin cambios) ===================
 def generar_grafico_entrada(df, decision, razones, patron, soporte, resistencia, slope, intercept, multiplicadores):
     df_plot = df.tail(GRAFICO_VELAS_LIMIT).copy()
     x = np.arange(len(df_plot))
@@ -364,7 +400,7 @@ def generar_grafico_entrada(df, decision, razones, patron, soporte, resistencia,
     if 'ema20' in df_plot.columns:
         ax.plot(x, df_plot['ema20'], 'y', label='EMA20')
     sl_m, tp1_m, trail_m = multiplicadores
-    texto = f"GROQ V99.17 | Decisión: {decision.upper()}\nPatrón: {patron[:70]}\nSL mult: {sl_m:.2f} | TP1 mult: {tp1_m:.2f} | Trail mult: {trail_m:.2f}\nRazones:\n" + "\n".join(razones[:3])
+    texto = f"GROQ V99.18 | Decisión: {decision.upper()}\nPatrón: {patron[:70]}\nSL mult: {sl_m:.2f} | TP1 mult: {tp1_m:.2f} | Trail mult: {trail_m:.2f}\nRazones:\n" + "\n".join(razones[:3])
     ax.text(0.01, 0.99, texto, transform=ax.transAxes, fontsize=10, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='black', alpha=0.85), color='white')
     entrada_x = len(df_plot)-2
     precio_entrada = df_plot['close'].iloc[-2]
@@ -427,7 +463,7 @@ def aprender_de_trades():
     print(msg)
     ULTIMO_APRENDIZAJE = len(TRADE_HISTORY)
 
-# =================== GESTIÓN DE RIESGO ===================
+# =================== GESTIÓN DE RIESGO Y PAPER TRADING (sin cambios) ===================
 def risk_management_check():
     global PAPER_DAILY_START_BALANCE, PAPER_STOPPED_TODAY, PAPER_CURRENT_DAY, PAPER_BALANCE
     hoy = datetime.now(timezone.utc).date()
@@ -554,8 +590,8 @@ def paper_revisar_sl_tp(df, soporte, resistencia, slope, intercept):
 # =================== LOOP PRINCIPAL ===================
 def run_bot():
     global ULTIMA_DECISION, ULTIMO_MOTIVO, ULTIMA_RAZONES, ULTIMO_PATRON, ULTIMOS_MULTIS
-    print("🤖 BOT V99.17 INICIADO - Corregido error de iteración en DataFrame")
-    telegram_mensaje("🤖 BOT V99.17 INICIADO - Análisis Nison con manejo robusto de datos")
+    print("🤖 BOT V99.18 INICIADO - Steve Nison completo: patrones, estructura, continuación")
+    telegram_mensaje("🤖 BOT V99.18 INICIADO - Análisis técnico integral (velas japonesas, tendencia, S/R)")
     ultima_vela = None
     while True:
         try:

@@ -1,5 +1,4 @@
-# BOT TRADING V99.16 – GROQ con interpretación CORRECTA de mechas + manejo robusto de JSON
-# ========================================================================================
+# BOT TRADING V99.17 – Corregido error de iteración en DataFrame
 import os, time, requests, json, re, numpy as np, pandas as pd
 from scipy.stats import linregress
 from datetime import datetime, timezone
@@ -195,14 +194,26 @@ def generar_descripcion_nison(df, idx=-2):
     else:
         rol_ema = "⚠️ EMA20 sin rol claro"
     
+    # Analizar velas correctamente usando iterrows()
     velas_analisis = []
     for i in range(max(0, len(df)-9), len(df)-1):
         v = df.iloc[i]
         patron, anatomia = analizar_anatomia_vela(v['open'], v['high'], v['low'], v['close'])
         velas_analisis.append(f"Vela {i+1}: {patron} | {anatomia} | Cierre: {v['close']:.2f}")
     
-    mechas_inf_largas = sum(1 for v in df.iloc[-6:-1] if ((min(v['close'], v['open']) - v['low']) / (v['high']-v['low']) > 0.5) if (v['high']-v['low']) > 0)
-    mechas_sup_largas = sum(1 for v in df.iloc[-6:-1] if ((v['high'] - max(v['close'], v['open'])) / (v['high']-v['low']) > 0.5) if (v['high']-v['low']) > 0)
+    # Detección de mechas largas en las últimas 6 velas
+    mechas_inf_largas = 0
+    mechas_sup_largas = 0
+    for i in range(max(0, len(df)-6), len(df)-1):
+        v = df.iloc[i]
+        rango = v['high'] - v['low']
+        if rango > 0:
+            sombra_inf_pct = (min(v['close'], v['open']) - v['low']) / rango * 100
+            sombra_sup_pct = (v['high'] - max(v['close'], v['open'])) / rango * 100
+            if sombra_inf_pct > 50:
+                mechas_inf_largas += 1
+            if sombra_sup_pct > 50:
+                mechas_sup_largas += 1
     alerta_mechas = ""
     if mechas_inf_largas >= 2:
         alerta_mechas += "⚠️ MECHAS INFERIORES LARGAS detectadas → presión compradora (ALCISTA). "
@@ -213,6 +224,7 @@ def generar_descripcion_nison(df, idx=-2):
     if patron_multiple:
         velas_analisis.append(f"✨ PATRÓN MÚLTIPLE: {patron_multiple}")
     
+    # Rechazos en soporte/resistencia
     df_cercano = df.iloc[-20:]
     toques_res = sum(1 for _, v in df_cercano.iterrows() if v['high'] >= resistencia * 0.998)
     toques_sop = sum(1 for _, v in df_cercano.iterrows() if v['low'] <= soporte * 1.002)
@@ -258,7 +270,7 @@ VELAS (últimas 8):
 """
     return descripcion, atr
 
-# =================== IA GROQ CORREGIDA ===================
+# =================== IA GROQ (corregida) ===================
 def analizar_con_groq_texto(descripcion, atr):
     try:
         system_msg = """
@@ -352,7 +364,7 @@ def generar_grafico_entrada(df, decision, razones, patron, soporte, resistencia,
     if 'ema20' in df_plot.columns:
         ax.plot(x, df_plot['ema20'], 'y', label='EMA20')
     sl_m, tp1_m, trail_m = multiplicadores
-    texto = f"GROQ V99.16 | Decisión: {decision.upper()}\nPatrón: {patron[:70]}\nSL mult: {sl_m:.2f} | TP1 mult: {tp1_m:.2f} | Trail mult: {trail_m:.2f}\nRazones:\n" + "\n".join(razones[:3])
+    texto = f"GROQ V99.17 | Decisión: {decision.upper()}\nPatrón: {patron[:70]}\nSL mult: {sl_m:.2f} | TP1 mult: {tp1_m:.2f} | Trail mult: {trail_m:.2f}\nRazones:\n" + "\n".join(razones[:3])
     ax.text(0.01, 0.99, texto, transform=ax.transAxes, fontsize=10, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='black', alpha=0.85), color='white')
     entrada_x = len(df_plot)-2
     precio_entrada = df_plot['close'].iloc[-2]
@@ -542,8 +554,8 @@ def paper_revisar_sl_tp(df, soporte, resistencia, slope, intercept):
 # =================== LOOP PRINCIPAL ===================
 def run_bot():
     global ULTIMA_DECISION, ULTIMO_MOTIVO, ULTIMA_RAZONES, ULTIMO_PATRON, ULTIMOS_MULTIS
-    print("🤖 BOT V99.16 INICIADO - Corrección de mechas + JSON robusto")
-    telegram_mensaje("🤖 BOT V99.16 INICIADO - Análisis Nison con manejo de errores")
+    print("🤖 BOT V99.17 INICIADO - Corregido error de iteración en DataFrame")
+    telegram_mensaje("🤖 BOT V99.17 INICIADO - Análisis Nison con manejo robusto de datos")
     ultima_vela = None
     while True:
         try:

@@ -310,9 +310,11 @@ def close_trade(price, reason):
 
     trade["close_price"] = price
     trade["close_time"] = now_utc().isoformat()
-    trade["result"] = "win" if (
-        (trade["side"] == "Buy" and price > trade["entry"]) or
-        (trade["side"] == "Sell" and price < trade["entry"]) else "loss"
+    # resultado correcto sin error de sintaxis
+    if (trade["side"] == "Buy" and price > trade["entry"]) or (trade["side"] == "Sell" and price < trade["entry"]):
+        trade["result"] = "win"
+    else:
+        trade["result"] = "loss"
     )
     trade["close_reason"] = reason
 

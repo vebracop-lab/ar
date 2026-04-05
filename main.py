@@ -1,9 +1,7 @@
-# BOT TRADING V99.14 – GROQ (llama-3.3-70b-versatile) con SUGERENCIA DE SL/TP
+# BOT TRADING V99.15 – GROQ con interpretación CORRECTA de mechas (Nison)
 # ==========================================================================
-# - La IA decide Buy/Sell/Hold y además recomienda multiplicadores de riesgo
-# - Límites conservadores para gráfico de 5 minutos
-# - TP1 fijo (cierra 50%), luego SL a break-even + trailing stop
-# - Autoaprendizaje y logs detallados
+# - Corrección: mecha inferior larga = soporte (alcista), mecha superior larga = resistencia (bajista)
+# - Prioriza ruptura de tendencia + confluencia de señales
 # ==========================================================================
 
 import os, time, requests, json, re, numpy as np, pandas as pd
@@ -29,7 +27,6 @@ LEVERAGE = 10
 SLEEP_SECONDS = 60
 GRAFICO_VELAS_LIMIT = 120
 
-# Valores por defecto (se usan si la IA no sugiere)
 DEFAULT_SL_MULT = 1.5
 DEFAULT_TP1_MULT = 1.6
 DEFAULT_TRAILING_MULT = 1.8
@@ -59,7 +56,6 @@ PAPER_DAILY_START_BALANCE = PAPER_BALANCE_INICIAL
 PAPER_STOPPED_TODAY = False
 PAPER_CURRENT_DAY = None
 
-# Parámetros adaptativos (aprendizaje)
 ADAPTIVE_BIAS = 0.0
 ADAPTIVE_SL_MULT = DEFAULT_SL_MULT
 ADAPTIVE_TP1_MULT = DEFAULT_TP1_MULT
@@ -113,7 +109,6 @@ def calcular_indicadores(df):
     low_close = (df['low'] - df['close'].shift()).abs()
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     df['atr'] = tr.rolling(14).mean()
-    # RSI
     delta = df['close'].diff()
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
@@ -121,7 +116,6 @@ def calcular_indicadores(df):
     avg_loss = loss.rolling(window=14).mean()
     rs = avg_gain / avg_loss
     df['rsi'] = 100 - (100 / (1 + rs))
-    # MACD
     exp1 = df['close'].ewm(span=12, adjust=False).mean()
     exp2 = df['close'].ewm(span=26, adjust=False).mean()
     df['macd'] = exp1 - exp2
@@ -150,6 +144,7 @@ def analizar_anatomia_vela(open_, high, low, close):
     sombra_sup_pct = (sombra_sup / rango) * 100
     sombra_inf_pct = (sombra_inf / rango) * 100
     es_verde = close >= open_
+    # Clasificación según Nison
     if cuerpo_pct < 10:
         patron = "DOJI (indecisión)"
     elif es_verde and sombra_inf_pct > 60 and cuerpo_pct < 30 and sombra_sup_pct < 10:
@@ -161,9 +156,9 @@ def analizar_anatomia_vela(open_, high, low, close):
     elif cuerpo_pct > 70 and sombra_sup_pct < 15 and sombra_inf_pct < 15:
         patron = "VELA LARGA SIN MECHAS (fuerte impulso)"
     elif sombra_sup_pct > 50 and cuerpo_pct < 50:
-        patron = "RECHAZO EN RESISTENCIA (mecha superior larga)"
+        patron = "RECHAZO EN RESISTENCIA (mecha superior larga) → BAJISTA"
     elif sombra_inf_pct > 50 and cuerpo_pct < 50:
-        patron = "REBOTE EN SOPORTE (mecha inferior larga)"
+        patron = "REBOTE EN SOPORTE (mecha inferior larga) → ALCISTA"
     else:
         patron = f"Vela normal ({cuerpo_pct:.0f}% cuerpo)"
     anatomia = f"Cuerpo: {cuerpo_pct:.1f}% | Sombra sup: {sombra_sup_pct:.1f}% | Sombra inf: {sombra_inf_pct:.1f}%"
@@ -180,7 +175,7 @@ def detectar_patrones_multiples(df, idx):
         return "TRES CUERVOS NEGROS (fuerte continuación bajista)"
     return ""
 
-# =================== DESCRIPCIÓN TEXTUAL (Nison) ===================
+# =================== DESCRIPCIÓN TEXTUAL (Nison) con énfasis en mechas ===================
 def generar_descripcion_nison(df, idx=-2):
     precio = df['close'].iloc[idx]
     atr = df['atr'].iloc[idx]
@@ -194,7 +189,7 @@ def generar_descripcion_nison(df, idx=-2):
     diff_ema_pct = (precio - ema_val) / ema_val * 100
     toques_ema = sum(1 for i in range(max(0, idx-5), idx+1) if df['low'].iloc[i] <= df['ema20'].iloc[i] <= df['high'].iloc[i])
     if abs(diff_ema_pct) < 0.15:
-        pos_ema = f"PRECIO JUSTO EN LA EMA20 (tocando exactamente, {toques_ema} toques en últimas 6 velas)"
+        pos_ema = f"PRECIO JUSTO EN LA EMA20 (tocando exactamente, {toques_ema} toques)"
     elif precio > ema_val:
         pos_ema = f"PRECIO ENCIMA DE EMA20 (+{diff_ema_pct:.2f}%, {toques_ema} toques)"
     else:
@@ -213,6 +208,15 @@ def generar_descripcion_nison(df, idx=-2):
         patron, anatomia = analizar_anatomia_vela(v['open'], v['high'], v['low'], v['close'])
         velas_analisis.append(f"Vela {i+1}: {patron} | {anatomia} | Cierre: {v['close']:.2f}")
     
+    # Destacar mechas largas recientes
+    mechas_inf_largas = sum(1 for v in df.iloc[-6:-1] if ((min(v['close'], v['open']) - v['low']) / (v['high']-v['low']) > 0.5) if (v['high']-v['low']) > 0)
+    mechas_sup_largas = sum(1 for v in df.iloc[-6:-1] if ((v['high'] - max(v['close'], v['open'])) / (v['high']-v['low']) > 0.5) if (v['high']-v['low']) > 0)
+    alerta_mechas = ""
+    if mechas_inf_largas >= 2:
+        alerta_mechas += "⚠️ Se detectaron MECHAS INFERIORES LARGAS en las últimas velas → Rechazo de precios bajos (presión compradora, ALCISTA). "
+    if mechas_sup_largas >= 2:
+        alerta_mechas += "⚠️ Se detectaron MECHAS SUPERIORES LARGAS en las últimas velas → Rechazo de precios altos (presión vendedora, BAJISTA). "
+    
     patron_multiple = detectar_patrones_multiples(df, idx)
     if patron_multiple:
         velas_analisis.append(f"✨ PATRÓN MÚLTIPLE: {patron_multiple}")
@@ -222,20 +226,20 @@ def generar_descripcion_nison(df, idx=-2):
     toques_sop = sum(1 for _, v in df_cercano.iterrows() if v['low'] <= soporte * 1.002)
     estructura = ""
     if toques_res >= 3:
-        estructura += f"⚠️ RESISTENCIA ({resistencia:.0f}) RECHAZADA {toques_res} VECES (TECHO SÓLIDO). "
+        estructura += f"⚠️ RESISTENCIA ({resistencia:.0f}) RECHAZADA {toques_res} VECES (TECHO SÓLIDO) → BAJISTA. "
     if toques_sop >= 3:
-        estructura += f"✅ SOPORTE ({soporte:.0f}) PROBADO {toques_sop} VECES (SUELO SÓLIDO). "
+        estructura += f"✅ SOPORTE ({soporte:.0f}) PROBADO {toques_sop} VECES (SUELO SÓLIDO) → ALCISTA. "
     
     ruptura = ""
     if len(df) > 20:
         pend_reciente, _, _, _, _ = linregress(np.arange(20), df['close'].iloc[-20:].values)
         if slope > 0 and pend_reciente < 0:
-            ruptura = "⚠️ RUPTURA DE TENDENCIA ALCISTA (pendiente reciente negativa)"
+            ruptura = "⚠️ RUPTURA DE TENDENCIA ALCISTA (pendiente reciente negativa) → BAJISTA"
         elif slope < 0 and pend_reciente > 0:
-            ruptura = "✅ RUPTURA DE TENDENCIA BAJISTA (pendiente reciente positiva)"
+            ruptura = "✅ RUPTURA DE TENDENCIA BAJISTA (pendiente reciente positiva) → ALCISTA"
     
-    if rsi > 70: rsi_texto = "SOBRECOMPRADO (>70)"
-    elif rsi < 30: rsi_texto = "SOBREVENDIDO (<30)"
+    if rsi > 70: rsi_texto = "SOBRECOMPRADO (>70) → posible BAJISTA"
+    elif rsi < 30: rsi_texto = "SOBREVENDIDO (<30) → posible ALCISTA"
     else: rsi_texto = f"NEUTRAL ({rsi:.1f})"
     
     if macd > signal and hist > 0:
@@ -256,29 +260,45 @@ MACD: {macd_texto} (hist {hist:.2f})
 {rol_ema}
 Soporte: {soporte:.2f} | Resistencia: {resistencia:.2f}
 {estructura}
+{alerta_mechas}
 VELAS (últimas 8):
 {chr(10).join(velas_analisis)}
 """
     return descripcion, atr
 
-# =================== IA GROQ (sugiere SL/TP) ===================
+# =================== IA GROQ (sugiere SL/TP) con PROMPT CORREGIDO ===================
 def analizar_con_groq_texto(descripcion, atr):
     try:
         system_msg = """
-        Eres Steve Nison, experto en velas japonesas. Analiza el gráfico y decide Buy/Sell/Hold.
+        Eres Steve Nison, el mayor experto en velas japonesas y análisis técnico.
+        Tu interpretación de las velas es la siguiente:
+        - Si una vela tiene una MECHA INFERIOR LARGA (sombra larga hacia abajo) y cierra cerca del máximo, indica que los compradores rechazaron los precios bajos → señal ALCISTA (BUY).
+        - Si una vela tiene una MECHA SUPERIOR LARGA (sombra larga hacia arriba) y cierra cerca del mínimo, indica que los vendedores rechazaron los precios altos → señal BAJISTA (SELL).
+        - Un patrón de MÚLTIPLES MECHAS INFERIORES LARGAS en velas consecutivas es una fuerte señal de soporte y presión compradora.
+        - Si el precio rompe una línea de tendencia alcista desde abajo hacia arriba y además hay mechas inferiores largas, es una señal de continuación alcista, NO de reversión.
+        - No confundas un rebote en soporte (mecha inferior larga) con un rechazo en resistencia.
+
+        Analiza TODO el contexto: velas, tendencia, EMA, soportes/resistencias, RSI, MACD.
+        Si hay al menos DOS SEÑALES A FAVOR (ej. ruptura de tendencia alcista + mechas inferiores largas + precio sobre EMA), toma posición BUY.
+        Si hay señales bajistas convergentes (ej. techo sólido + mechas superiores largas + precio bajo EMA), toma SELL.
+        Si no hay claridad, HOLD.
+
         Además, sugiere multiplicadores para Stop Loss (SL), Take Profit 1 (TP1) y Trailing Stop.
-        Considera que es gráfico de 5 minutos, por lo que los niveles no deben ser muy lejanos.
-        Rangos recomendados: SL: 1.0 - 2.0 x ATR, TP1: 1.2 - 2.5 x ATR, Trailing: 1.2 - 2.0 x ATR.
-        Responde ÚNICAMENTE con JSON:
+        Considera que es gráfico de 5 minutos: rangos razonables:
+        - SL: 1.0 - 2.0 x ATR
+        - TP1: 1.2 - 2.5 x ATR
+        - Trailing: 1.2 - 2.0 x ATR
+
+        Responde ÚNICAMENTE con JSON en este formato:
         {
           "decision": "Buy/Sell/Hold",
-          "patron": "nombre del patrón",
+          "patron": "nombre del patrón o situación",
           "razones": ["razón1","razón2","razón3"],
           "sl_mult": 1.5,
           "tp1_mult": 1.8,
           "trailing_mult": 1.6
         }
-        Si es Hold, los multiplicadores pueden ser nulos o por defecto.
+        Si es Hold, los multiplicadores pueden ser los valores por defecto.
         """
         user_msg = f"{descripcion}\nATR actual: {atr:.2f}\n\nRecomienda multiplicadores realistas para 5m."
         respuesta = client.chat.completions.create(
@@ -300,7 +320,6 @@ def analizar_con_groq_texto(descripcion, atr):
         sl_mult = float(datos.get("sl_mult", DEFAULT_SL_MULT))
         tp1_mult = float(datos.get("tp1_mult", DEFAULT_TP1_MULT))
         trailing_mult = float(datos.get("trailing_mult", DEFAULT_TRAILING_MULT))
-        # Limitar rangos
         sl_mult = max(1.0, min(2.5, sl_mult))
         tp1_mult = max(1.2, min(3.0, tp1_mult))
         trailing_mult = max(1.2, min(2.5, trailing_mult))
@@ -309,7 +328,7 @@ def analizar_con_groq_texto(descripcion, atr):
         print(f"Error Groq: {e}")
         return "Hold", ["Error"], "", (DEFAULT_SL_MULT, DEFAULT_TP1_MULT, DEFAULT_TRAILING_MULT), ""
 
-# =================== GRÁFICOS (solo para Telegram) ===================
+# =================== GRÁFICOS (sin cambios) ===================
 def generar_grafico_entrada(df, decision, razones, patron, soporte, resistencia, slope, intercept, multiplicadores):
     df_plot = df.tail(GRAFICO_VELAS_LIMIT).copy()
     x = np.arange(len(df_plot))
@@ -325,7 +344,7 @@ def generar_grafico_entrada(df, decision, razones, patron, soporte, resistencia,
     if 'ema20' in df_plot.columns:
         ax.plot(x, df_plot['ema20'], 'y', label='EMA20')
     sl_m, tp1_m, trail_m = multiplicadores
-    texto = f"GROQ V99.14 | Decisión: {decision.upper()}\nPatrón: {patron[:70]}\nSL mult: {sl_m:.2f} | TP1 mult: {tp1_m:.2f} | Trail mult: {trail_m:.2f}\nRazones:\n" + "\n".join(razones[:3])
+    texto = f"GROQ V99.15 | Decisión: {decision.upper()}\nPatrón: {patron[:70]}\nSL mult: {sl_m:.2f} | TP1 mult: {tp1_m:.2f} | Trail mult: {trail_m:.2f}\nRazones:\n" + "\n".join(razones[:3])
     ax.text(0.01, 0.99, texto, transform=ax.transAxes, fontsize=10, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='black', alpha=0.85), color='white')
     entrada_x = len(df_plot)-2
     precio_entrada = df_plot['close'].iloc[-2]
@@ -366,7 +385,7 @@ def generar_grafico_salida(df, posicion, precio_entrada, precio_salida, pnl, win
     plt.close()
     return ruta
 
-# =================== AUTOAPRENDIZAJE (ajusta sesgo y multiplicadores) ===================
+# =================== AUTOAPRENDIZAJE ===================
 def aprender_de_trades():
     global ADAPTIVE_BIAS, ADAPTIVE_SL_MULT, ADAPTIVE_TP1_MULT, ADAPTIVE_TRAILING_MULT, ULTIMO_APRENDIZAJE
     if len(TRADE_HISTORY) < 10 or (ULTIMO_APRENDIZAJE and len(TRADE_HISTORY) - ULTIMO_APRENDIZAJE < 10):
@@ -388,7 +407,7 @@ def aprender_de_trades():
     print(msg)
     ULTIMO_APRENDIZAJE = len(TRADE_HISTORY)
 
-# =================== GESTIÓN DE RIESGO (usa multiplicadores sugeridos + adaptativos) ===================
+# =================== GESTIÓN DE RIESGO (igual) ===================
 def risk_management_check():
     global PAPER_DAILY_START_BALANCE, PAPER_STOPPED_TODAY, PAPER_CURRENT_DAY, PAPER_BALANCE
     hoy = datetime.now(timezone.utc).date()
@@ -409,15 +428,12 @@ def paper_abrir_posicion(decision, precio, atr, razones, patron, multiplicadores
     global PAPER_SL_ACTUAL, PAPER_BALANCE, ULTIMA_DECISION, ULTIMO_MOTIVO, ULTIMOS_MULTIS
     if PAPER_POSICION_ACTIVA: return False
     riesgo_usd = PAPER_BALANCE * RISK_PER_TRADE
-    # Mezclar multiplicadores de IA con adaptativos (60% IA, 40% adaptativo)
     sl_mult = 0.6 * multiplicadores_ia[0] + 0.4 * ADAPTIVE_SL_MULT
     tp1_mult = 0.6 * multiplicadores_ia[1] + 0.4 * ADAPTIVE_TP1_MULT
     trailing_mult = 0.6 * multiplicadores_ia[2] + 0.4 * ADAPTIVE_TRAILING_MULT
-    # Limitar nuevamente por seguridad
     sl_mult = max(1.0, min(2.5, sl_mult))
     tp1_mult = max(1.2, min(3.0, tp1_mult))
     trailing_mult = max(1.2, min(2.5, trailing_mult))
-    
     if decision == "Buy":
         sl = precio - (atr * sl_mult)
         tp1 = precio + (atr * tp1_mult)
@@ -428,7 +444,6 @@ def paper_abrir_posicion(decision, precio, atr, razones, patron, multiplicadores
     if distancia == 0: return False
     size_usd = min((riesgo_usd / distancia) * precio, PAPER_BALANCE * LEVERAGE)
     size_btc = size_usd / precio
-    
     PAPER_POSICION_ACTIVA = decision
     PAPER_PRECIO_ENTRADA = precio
     PAPER_SL_INICIAL = sl
@@ -439,7 +454,6 @@ def paper_abrir_posicion(decision, precio, atr, razones, patron, multiplicadores
     PAPER_TP1_EJECUTADO = False
     PAPER_SL_ACTUAL = sl
     ULTIMOS_MULTIS = (sl_mult, tp1_mult, trailing_mult)
-    
     msg = f"📌 {decision.upper()} | Entrada: {precio:.2f} | SL: {sl:.2f} (dist {atr*sl_mult:.1f}) | TP1: {tp1:.2f} (RR {tp1_mult/sl_mult:.2f}) | Trail: {trailing_mult}x ATR\nRazones: {' | '.join(razones[:2])}"
     telegram_mensaje(msg)
     ULTIMA_DECISION = decision
@@ -455,7 +469,6 @@ def paper_revisar_sl_tp(df, soporte, resistencia, slope, intercept):
     if PAPER_POSICION_ACTIVA is None: return None
     high, low, close, atr = df['high'].iloc[-1], df['low'].iloc[-1], df['close'].iloc[-1], df['atr'].iloc[-1]
     cerrar, motivo = False, ""
-    # TP1 parcial
     if not PAPER_TP1_EJECUTADO:
         if (PAPER_POSICION_ACTIVA == "Buy" and high >= PAPER_TP1) or (PAPER_POSICION_ACTIVA == "Sell" and low <= PAPER_TP1):
             beneficio = (PAPER_TP1 - PAPER_PRECIO_ENTRADA) * (PAPER_SIZE_BTC * PORCENTAJE_CIERRE_TP1) if PAPER_POSICION_ACTIVA == "Buy" else (PAPER_PRECIO_ENTRADA - PAPER_TP1) * (PAPER_SIZE_BTC * PORCENTAJE_CIERRE_TP1)
@@ -463,9 +476,8 @@ def paper_revisar_sl_tp(df, soporte, resistencia, slope, intercept):
             PAPER_PNL_PARCIAL = beneficio
             PAPER_SIZE_BTC_RESTANTE = PAPER_SIZE_BTC * (1 - PORCENTAJE_CIERRE_TP1)
             PAPER_TP1_EJECUTADO = True
-            PAPER_SL_ACTUAL = PAPER_PRECIO_ENTRADA  # break-even
+            PAPER_SL_ACTUAL = PAPER_PRECIO_ENTRADA
             telegram_mensaje(f"🎯 TP1 alcanzado en {PAPER_TP1:.2f} | Beneficio parcial: +{beneficio:.2f} USD | SL a break-even ({PAPER_PRECIO_ENTRADA:.2f}) | Restan {PAPER_SIZE_BTC_RESTANTE:.4f} BTC | Trailing activo")
-    # Trailing para el resto (solo después de TP1)
     if PAPER_TP1_EJECUTADO:
         if PAPER_POSICION_ACTIVA == "Buy":
             nuevo_sl = close - (atr * PAPER_TRAILING_MULT)
@@ -482,7 +494,6 @@ def paper_revisar_sl_tp(df, soporte, resistencia, slope, intercept):
             if high >= PAPER_SL_ACTUAL:
                 cerrar, motivo = True, "Trailing Stop"
     else:
-        # SL inicial
         if (PAPER_POSICION_ACTIVA == "Buy" and low <= PAPER_SL_INICIAL) or (PAPER_POSICION_ACTIVA == "Sell" and high >= PAPER_SL_INICIAL):
             cerrar, motivo = True, "Stop Loss Inicial"
             PAPER_SL_ACTUAL = PAPER_SL_INICIAL
@@ -523,8 +534,8 @@ def paper_revisar_sl_tp(df, soporte, resistencia, slope, intercept):
 # =================== LOOP PRINCIPAL ===================
 def run_bot():
     global ULTIMA_DECISION, ULTIMO_MOTIVO, ULTIMA_RAZONES, ULTIMO_PATRON, ULTIMOS_MULTIS
-    print("🤖 BOT V99.14 INICIADO - IA sugiere SL/TP para 5m + autoaprendizaje")
-    telegram_mensaje("🤖 BOT V99.14 INICIADO - Análisis Nison con gestión dinámica de SL/TP")
+    print("🤖 BOT V99.15 INICIADO - Corrección de mechas (Nison) + interpretación contextual")
+    telegram_mensaje("🤖 BOT V99.15 INICIADO - Análisis de velas con énfasis en mechas largas y confluencia")
     ultima_vela = None
     while True:
         try:
@@ -539,7 +550,7 @@ def run_bot():
             print(f"\n💓 Heartbeat | Precio: {precio:.2f} | ATR: {atr:.2f} | Sop: {soporte:.2f} | Res: {resistencia:.2f} | Trades: {PAPER_TRADES_TOTALES} | PnL: {pnl_global:+.2f} | Winrate: {winrate:.1f}% | Drawdown: {drawdown:.2f}% | Decisión: {ULTIMA_DECISION} - {ULTIMO_MOTIVO[:50]}")
             if PAPER_POSICION_ACTIVA is None and ultima_vela != vela_cerrada:
                 descripcion, atr_val = generar_descripcion_nison(df)
-                print(f"📝 Descripción enviada a Groq (primeros 500 chars):\n{descripcion[:500]}...")
+                print(f"📝 Descripción enviada a Groq (primeros 600 chars):\n{descripcion[:600]}...")
                 decision, razones, patron, multiplicadores_ia, raw = analizar_con_groq_texto(descripcion, atr_val)
                 ULTIMA_DECISION, ULTIMO_MOTIVO, ULTIMA_RAZONES, ULTIMO_PATRON = decision, razones[0] if razones else "", razones, patron
                 if decision in ["Buy","Sell"] and risk_management_check():

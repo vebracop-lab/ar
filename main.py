@@ -1,4 +1,4 @@
-# BOT TRADING V99.23 – GROQ (NISON HOLÍSTICO + PRESIÓN + LOGS + APRENDIZAJE)
+# BOT TRADING V99.24 – GROQ (NISON HOLÍSTICO + CORRECCIÓN INDEX TRAILING)
 # ==============================================================================
 import os, time, requests, json, re, numpy as np, pandas as pd
 from scipy.stats import linregress
@@ -107,7 +107,9 @@ def calcular_indicadores(df):
     return df.dropna()
 
 def detectar_zonas_mercado(df, idx=-2, ventana_macro=120):
-    df_eval = df.iloc[:idx+1]
+    # CORRECCIÓN DE SLICING (EVITA DATAFRAME VACÍO SI IDX ES -1)
+    df_eval = df if idx == -1 else df.iloc[:idx+1]
+    
     soporte = df_eval['low'].rolling(40).min().iloc[-1]
     resistencia = df_eval['high'].rolling(40).max().iloc[-1]
     
@@ -190,12 +192,12 @@ def generar_descripcion_nison(df, idx=-2):
     soporte, resistencia, slope, intercept, tendencia, micro = detectar_zonas_mercado(df, idx)
     patron = analizar_patron_nison_completo(df, idx)
 
-    # Análisis de Presión Acumulada
-    df_reciente = df.iloc[idx-20:idx+1]
+    # CORRECCIÓN DE SLICING EN REPORTE
+    df_reciente = df.iloc[idx-20:] if idx == -1 else df.iloc[idx-20:idx+1]
     toques_res = (df_reciente['high'] >= resistencia * 0.998).sum()
     toques_sop = (df_reciente['low'] <= soporte * 1.002).sum()
     
-    df_mechas = df.iloc[idx-8:idx+1]
+    df_mechas = df.iloc[idx-8:] if idx == -1 else df.iloc[idx-8:idx+1]
     rangos = df_mechas['high'] - df_mechas['low']
     cuerpos_max = df_mechas[['close', 'open']].max(axis=1)
     cuerpos_min = df_mechas[['close', 'open']].min(axis=1)
@@ -290,7 +292,7 @@ def analizar_con_groq_texto(descripcion, atr):
         print(f"Error IA: {e}")
         return "Hold", ["Error IA"], "", (DEFAULT_SL_MULT, DEFAULT_TP1_MULT, DEFAULT_TRAILING_MULT)
 
-# =================== AUTOAPRENDIZAJE (Restaurado) ===================
+# =================== AUTOAPRENDIZAJE ===================
 def aprender_de_trades():
     global ADAPTIVE_BIAS, ADAPTIVE_SL_MULT, ADAPTIVE_TP1_MULT, ADAPTIVE_TRAILING_MULT, ULTIMO_APRENDIZAJE
     if len(TRADE_HISTORY) < 10 or (ULTIMO_APRENDIZAJE and len(TRADE_HISTORY) - ULTIMO_APRENDIZAJE < 10):
@@ -370,7 +372,6 @@ def paper_abrir_posicion(decision, precio, atr, razones, patron, multis_ia):
     global PAPER_SIZE_BTC, PAPER_SIZE_BTC_RESTANTE, PAPER_TP1_EJECUTADO, PAPER_SL_ACTUAL, ULTIMOS_MULTIS, PAPER_MAX_PRECIO_ALCANZADO
     if PAPER_POSICION_ACTIVA: return False
     
-    # Combinación de sugerencia IA + Autoaprendizaje
     sl_m = (multis_ia[0] * 0.6) + (ADAPTIVE_SL_MULT * 0.4)
     tp_m = (multis_ia[1] * 0.6) + (ADAPTIVE_TP1_MULT * 0.4)
     tr_m = (multis_ia[2] * 0.6) + (ADAPTIVE_TRAILING_MULT * 0.4)
@@ -417,27 +418,22 @@ def paper_revisar_sl_tp(df, sop, res, slo, inter):
     cerrar = False
     motivo = ""
     
-    # Actualizar Precio Máximo Alcanzado para el Trailing
     if PAPER_POSICION_ACTIVA == "Buy": 
         PAPER_MAX_PRECIO_ALCANZADO = max(PAPER_MAX_PRECIO_ALCANZADO, h)
     else: 
         PAPER_MAX_PRECIO_ALCANZADO = min(PAPER_MAX_PRECIO_ALCANZADO, l)
     
-    # Evaluar TP1 Fijo
     if not PAPER_TP1_EJECUTADO:
         if (PAPER_POSICION_ACTIVA == "Buy" and h >= PAPER_TP1) or (PAPER_POSICION_ACTIVA == "Sell" and l <= PAPER_TP1):
             PAPER_PNL_PARCIAL = abs(PAPER_TP1 - PAPER_PRECIO_ENTRADA) * (PAPER_SIZE_BTC * PORCENTAJE_CIERRE_TP1)
             PAPER_BALANCE += PAPER_PNL_PARCIAL
             PAPER_SIZE_BTC_RESTANTE *= (1 - PORCENTAJE_CIERRE_TP1)
             PAPER_TP1_EJECUTADO = True
-            # Subir SL a Break-Even Inmediatamente
             PAPER_SL_ACTUAL = PAPER_PRECIO_ENTRADA 
             telegram_mensaje(f"🎯 ¡TP1 ALCANZADO!\nSe cerró el 50% de la posición asegurando +{PAPER_PNL_PARCIAL:.2f} USD.\n🛡️ El Stop Loss se ha movido a Break-Even ({PAPER_PRECIO_ENTRADA:.2f}). Dejamos correr el resto con Trailing.")
             
-    # Evaluar SL Dinámico (Trailing) o Inicial
     if PAPER_TP1_EJECUTADO:
         n_sl = PAPER_MAX_PRECIO_ALCANZADO - (atr * PAPER_TRAILING_MULT) if PAPER_POSICION_ACTIVA == "Buy" else PAPER_MAX_PRECIO_ALCANZADO + (atr * PAPER_TRAILING_MULT)
-        # Solo subimos el SL, nunca lo bajamos
         if (PAPER_POSICION_ACTIVA == "Buy" and n_sl > PAPER_SL_ACTUAL) or (PAPER_POSICION_ACTIVA == "Sell" and n_sl < PAPER_SL_ACTUAL):
             PAPER_SL_ACTUAL = n_sl
             print(f"🔄 Trailing Stop ajustado dinámicamente a: {PAPER_SL_ACTUAL:.2f}")
@@ -451,7 +447,6 @@ def paper_revisar_sl_tp(df, sop, res, slo, inter):
             motivo = "Stop Loss Inicial Alcanzado"
             PAPER_SL_ACTUAL = PAPER_SL_INICIAL
 
-    # Lógica de Cierre
     if cerrar:
         pnl_rest = (PAPER_SL_ACTUAL - PAPER_PRECIO_ENTRADA) * PAPER_SIZE_BTC_RESTANTE if PAPER_POSICION_ACTIVA == "Buy" else (PAPER_PRECIO_ENTRADA - PAPER_SL_ACTUAL) * PAPER_SIZE_BTC_RESTANTE
         pnl_total = PAPER_PNL_PARCIAL + pnl_rest
@@ -490,8 +485,8 @@ Precio de Salida: {PAPER_SL_ACTUAL:.2f}
 # =================== LOOP PRINCIPAL ===================
 def run_bot():
     global ULTIMA_DECISION, ULTIMO_MOTIVO, ULTIMA_RAZONES, ULTIMO_PATRON
-    print("🤖 BOT V99.23 INICIADO - Nison Holístico, Autoaprendizaje y Logs Ricos")
-    telegram_mensaje("🤖 BOT V99.23 INICIADO - Monitoreo Holístico Activado")
+    print("🤖 BOT V99.24 INICIADO - Nison Holístico, Autoaprendizaje y Logs Ricos")
+    telegram_mensaje("🤖 BOT V99.24 INICIADO - Monitoreo Holístico Activado")
     
     ultima_vela = None
     while True:
@@ -506,7 +501,7 @@ def run_bot():
             drawdown = (PAPER_BALANCE - PAPER_DAILY_START_BALANCE) / PAPER_DAILY_START_BALANCE * 100
             winrate = (PAPER_WIN / PAPER_TRADES_TOTALES) * 100 if PAPER_TRADES_TOTALES > 0 else 0
             
-            # Print enriquecido (Heartbeat Restaurado)
+            # Print enriquecido
             print(f"\n💓 Heartbeat | Precio: {precio:.2f} | ATR: {atr:.2f} | Sop: {sop:.2f} | Res: {res:.2f} | Trades: {PAPER_TRADES_TOTALES} | PnL: {pnl_global:+.2f} | Winrate: {winrate:.1f}% | Drawdown: {drawdown:.2f}%")
             print(f"📊 Última Evaluación: {ULTIMA_DECISION} - {ULTIMO_MOTIVO[:60]}")
             

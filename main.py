@@ -1,8 +1,9 @@
 # BOT TRADING V99.32 – GROQ (MULTI-TRADES + BARRIDOS DE LIQUIDEZ/FAKEOUTS)
 # ==============================================================================
 # MEJORAS INCORPORADAS:
-# 1. Detección de consolidación estrecha local (últimas 10 velas) para evitar falsos barridos en rangos laterales.
-# 2. Refuerzo de conceptos de Price Action en el prompt de la IA (conversión de roles, agotamiento, etc.).
+# 1. Detección de ruido lateral con múltiples toques a la EMA para evitar falsos barridos.
+# 2. Refuerzo de reglas en el prompt de la IA.
+# 3. Flecha de entrada en gráfico posicionada arriba para mejor visibilidad.
 # ==============================================================================
 import os, time, requests, json, re, numpy as np, pandas as pd
 from scipy.stats import linregress
@@ -222,51 +223,48 @@ def generar_descripcion_nison(df, idx=-2):
 """
     return descripcion, atr
 
-# =================== MEJORA: DETECCIÓN DE CONSOLIDACIÓN ESTRECHA LOCAL ===================
-def es_consolidacion_estrecha(df, atr):
+# =================== MEJORA: DETECCIÓN DE RUIDO LATERAL CON MÚLTIPLES TOQUES A EMA ===================
+def es_ruido_lateral(df, atr):
     """
-    Detecta si las últimas 10 velas forman un rango muy pequeño (menos de 1.2 * ATR)
-    y además el precio está pegado a la EMA20 (distancia < 0.3 * ATR).
-    En ese caso, el mercado está comprimido sin dirección, y cualquier señal de barrido es falsa.
+    Detecta si en las últimas 15 velas el precio ha cruzado la EMA20 repetidamente
+    sin generar una vela de cuerpo grande (>0.6 * ATR) ni una tendencia clara.
+    En ese caso, cualquier "barrido" es falso y se debe forzar Hold.
     """
-    if len(df) < 10:
+    if len(df) < 15:
         return False
-    ultimas_10 = df.iloc[-10:]
-    rango_local = ultimas_10['high'].max() - ultimas_10['low'].min()
-    if rango_local <= 0 or atr <= 0:
-        return False
-    # Si el rango de las últimas 10 velas es menor a 1.2 veces el ATR
-    if rango_local < 1.2 * atr:
-        # Además, ver si el precio está cerca de la EMA20 (distancia < 0.3 * ATR)
-        precio_actual = df['close'].iloc[-1]
-        ema20_actual = df['ema20'].iloc[-1]
-        distancia_ema = abs(precio_actual - ema20_actual)
-        if distancia_ema < 0.3 * atr:
+    ultimas = df.iloc[-15:]
+    # Contar cuántas velas tienen el cierre por encima de la EMA y cuántas por debajo
+    above = (ultimas['close'] > ultimas['ema20']).sum()
+    below = (ultimas['close'] < ultimas['ema20']).sum()
+    # Si hay al menos 5 de cada lado, hay indecisión
+    if above >= 5 and below >= 5:
+        # Además, verificar que ninguna vela tenga cuerpo grande
+        cuerpos = (ultimas['close'] - ultimas['open']).abs()
+        if cuerpos.max() < 0.6 * atr:
             return True
     return False
 
-# =================== IA GROQ: DECISIÓN MATRIZ TOTAL (CON CONCEPTOS REFORZADOS) ===================
+# =================== IA GROQ: DECISIÓN MATRIZ TOTAL ===================
 def analizar_con_groq_texto(descripcion, atr, reglas_aprendidas):
     try:
-        # MEJORA: Prompt con recordatorios de conceptos clave de Price Action
         system_msg = f"""
         Eres un Maestro del Price Action. Lees la "MATRIZ DE CONFLUENCIA" de forma holística.
         Entiendes que los Soportes, Resistencias y EMAs NO SON LÍNEAS EXACTAS.
         Si el mercado "perfora" una zona pero el cuerpo de la vela cierra devolviéndose (Barrido de Liquidez / Fakeout), sabes que es una confirmación enorme, porque han cazado los Stop Loss de los novatos.
 
-        🔥 RECORDATORIOS CLAVE DE PRICE ACTION (NO LOS OLVIDES):
+        🔥 RECORDATORIOS CLAVE DE PRICE ACTION:
         - La EMA20 actúa como SOPORTE cuando el precio está por encima, y como RESISTENCIA cuando está por debajo. Un simple toque sin mecha larga NO es un barrido.
-        - Una acumulación de mechas largas cerca de un nivel indica AGOTAMIENTO (los toros u osos no pueden mantener el precio).
+        - Muchas mechas largas SUPERIORES cerca de un nivel indican AGOTAMIENTO ALCISTA (posible giro bajista). Muchas mechas largas INFERIORES indican AGOTAMIENTO BAJISTA (posible giro alcista).
         - Cuando un SOPORTE se rompe, se convierte en RESISTENCIA (y viceversa). Respeta la conversión de roles.
-        - Las falsas rupturas (barridos) son señales muy fuertes en dirección contraria a la mecha, pero solo si hay contexto de tendencia o acumulación previa.
-        - En consolidaciones extremadamente estrechas (rango muy pequeño), NO hay barridos reales. Espera expansión.
+        - Las falsas rupturas (barridos) son señales muy fuertes en dirección contraria a la mecha, PERO solo si hay contexto de tendencia o acumulación previa.
+        - Si el precio ha tocado la EMA múltiples veces en las últimas 15 velas sin cuerpo grande ni dirección clara, es CONSOLIDACIÓN LATERAL, no barrido. En ese caso, NO ACTÚES.
 
         🔥 REGLA EVOLUTIVA DE TU MENTOR:
         "{reglas_aprendidas}"
 
         LÓGICA OPERATIVA:
-        - Puedes operar Reversiones, Continuaciones, Rompimientos o Trampas de Liquidez en CUALQUIER zona del gráfico si la suma del contexto lo apoya.
-        - NO ignores la vela actual. Si el contexto es alcista pero la vela actual es una gran Estrella Fugaz (Oso), se anulan y es "Hold".
+        - Puedes operar Reversiones, Continuaciones, Rompimientos o Trampas de Liquidez si la suma del contexto lo apoya.
+        - NO ignores la vela actual. Si el contexto es alcista pero la vela actual es una gran Estrella Fugaz, se anulan y es "Hold".
         
         Responde ÚNICAMENTE con un JSON válido en este formato:
         {{
@@ -349,7 +347,7 @@ def aprender_de_trades():
     except Exception as e:
         print(f"Error Aprendizaje: {e}")
 
-# =================== GRÁFICOS MULTI-TRADE ===================
+# =================== GRÁFICOS MULTI-TRADE (FLECHA ARRIBA) ===================
 def generar_grafico(df, trade_info, soporte, resistencia, slope, intercept, tipo="Entrada"):
     df_plot = df.tail(GRAFICO_VELAS_LIMIT).copy()
     x = np.arange(len(df_plot))
@@ -368,8 +366,18 @@ def generar_grafico(df, trade_info, soporte, resistencia, slope, intercept, tipo
     
     if tipo == "Entrada":
         decision = trade_info['decision']
-        p_act = df_plot['close'].iloc[-2]
-        ax.scatter(len(df_plot)-2, p_act + (-30 if decision=='Buy' else 30), s=400, marker='^' if decision=='Buy' else 'v', c='lime' if decision=='Buy' else 'red', zorder=5)
+        # Obtener los límites del gráfico actual (después de dibujar)
+        ymin, ymax = ax.get_ylim()
+        # Posicionar la flecha en un 95% del rango vertical (cerca del borde superior)
+        y_flecha = ymin + 0.95 * (ymax - ymin)
+        # La x corresponde a la última vela cerrada (índice -2)
+        x_flecha = len(df_plot) - 2
+        # Dibujar flecha grande con annotate
+        ax.annotate('', xy=(x_flecha, y_flecha), xytext=(x_flecha, y_flecha - 0.05*(ymax-ymin)),
+                     arrowprops=dict(arrowstyle='<-', lw=3, color='lime' if decision=='Buy' else 'red'),
+                     annotation_clip=False)
+        # También un marcador adicional
+        ax.scatter(x_flecha, y_flecha, s=300, marker='^' if decision=='Buy' else 'v', c='lime' if decision=='Buy' else 'red', zorder=5)
         txt = f"[TRADE #{trade_info['id']}] {decision.upper()}\nMatriz Global: {trade_info['patron']}\nSL: {trade_info['sl_inicial']:.2f} | TP1: {trade_info['tp1']:.2f} | Trail: {trade_info['trailing_mult']}x"
     else:
         win = trade_info['resultado_win']
@@ -554,15 +562,15 @@ def run_bot():
                 desc, atr_val = generar_descripcion_nison(df)
                 print(f"--- Evaluando Matriz de Vela: {vela_cerrada.strftime('%H:%M')} ---")
                 
-                # MEJORA: Antes de consultar a la IA, verificar si hay consolidación estrecha local
-                if es_consolidacion_estrecha(df, atr):
+                # MEJORA: Detectar ruido lateral múltiple toques EMA
+                if es_ruido_lateral(df, atr):
                     decision = "Hold"
-                    razones = ["Consolidación extremadamente estrecha (rango local < 1.2 ATR y precio pegado a EMA20). No hay margen para operar. Esperar expansión."]
+                    razones = ["Múltiples toques laterales a la EMA sin dirección clara. No es barrido, es consolidación."]
                     patron = ""
                     multis = (DEFAULT_SL_MULT, DEFAULT_TP1_MULT, DEFAULT_TRAILING_MULT)
                     ULTIMA_DECISION, ULTIMO_MOTIVO = decision, razones[0]
                     print(f"⏸️ {ULTIMO_MOTIVO}")
-                    telegram_mensaje(f"⚠️ CONSOLIDACIÓN ESTRECHA: Rango últimas 10 velas = {df['high'].iloc[-10:].max() - df['low'].iloc[-10:].min():.2f} USD (ATR={atr:.2f}). Hold forzado.")
+                    telegram_mensaje("⚠️ RUIDO LATERAL: Múltiples cruces de EMA sin fuerza. Hold forzado.")
                 else:
                     decision, razones, patron, multis = analizar_con_groq_texto(desc, atr_val, REGLAS_APRENDIDAS)
                     ULTIMA_DECISION, ULTIMO_MOTIVO = decision, razones[0] if razones else "Sin razones"

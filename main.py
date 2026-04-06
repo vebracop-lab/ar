@@ -1,4 +1,4 @@
-# BOT TRADING V99.27 – GROQ (TU CÓDIGO BUENO + INTELIGENCIA EVOLUTIVA IA)
+# BOT TRADING V99.28 – GROQ (NISON HOLÍSTICO + CABALGAR EMA Y ESTRUCTURA GLOBAL)
 # ==============================================================================
 import os, time, requests, json, re, numpy as np, pandas as pd
 from scipy.stats import linregress
@@ -57,7 +57,7 @@ ADAPTIVE_SL_MULT = DEFAULT_SL_MULT
 ADAPTIVE_TP1_MULT = DEFAULT_TP1_MULT
 ADAPTIVE_TRAILING_MULT = DEFAULT_TRAILING_MULT
 ULTIMO_APRENDIZAJE = 0
-REGLAS_APRENDIDAS = "Aún no hay trades suficientes para sacar conclusiones. Opera siguiendo las reglas de Nison."
+REGLAS_APRENDIDAS = "Aún no hay trades suficientes. Analiza el gráfico completo sin sesgos."
 
 ULTIMA_DECISION = "Hold"
 ULTIMO_MOTIVO = "Esperando señal"
@@ -122,7 +122,7 @@ def detectar_zonas_mercado(df, idx=-2, ventana_macro=120):
     
     return soporte, resistencia, slope, intercept, tendencia, micro_tendencia
 
-# =================== MOTOR HOLÍSTICO NISON ===================
+# =================== MOTOR HOLÍSTICO NISON (ACTUALIZADO) ===================
 def analizar_patron_nison_completo(df, idx):
     if idx < 3: return "Datos insuficientes"
     
@@ -145,24 +145,30 @@ def analizar_patron_nison_completo(df, idx):
 
     patrones = []
 
+    # Reversiones Mayores
     if not verde1 and c1 > r1*0.5 and cp2 < 30 and verde3 and c3 > r3*0.5 and v3['close'] > (v1['open']+v1['close'])/2:
         patrones.append("🌟 ESTRELLA DE LA MAÑANA")
     if verde1 and c1 > r1*0.5 and cp2 < 30 and not verde3 and c3 > r3*0.5 and v3['close'] < (v1['open']+v1['close'])/2:
         patrones.append("🌟 ESTRELLA DEL ATARDECER")
+    
+    # Continuaciones Fuertes
     if verde1 and verde2 and verde3 and c3 > c2 and c2 > c1 and inf3 < 20 and inf2 < 20:
         patrones.append("🚀 TRES SOLDADOS BLANCOS")
     if not verde1 and not verde2 and not verde3 and c3 > c2 and c2 > c1 and sup3 < 20 and sup2 < 20:
         patrones.append("🩸 TRES CUERVOS NEGROS")
+
+    # Envolventes
     if not verde2 and verde3 and v3['close'] > v2['open'] and v3['open'] < v2['close']:
         patrones.append("🐂 ENVOLVENTE ALCISTA")
     if verde2 and not verde3 and v3['close'] < v2['open'] and v3['open'] > v2['close']:
         patrones.append("🐻 ENVOLVENTE BAJISTA")
-    if not verde2 and verde3 and v3['open'] < v2['close'] and v3['close'] > (v2['open'] + v2['close'])/2:
-        patrones.append("🔪 PAUTA PENETRANTE")
-    if verde2 and not verde3 and v3['open'] > v2['close'] and v3['close'] < (v2['open'] + v2['close'])/2:
-        patrones.append("⛈️ NUBE OSCURA")
 
-    if cp3 < 10:
+    # Velas Individuales y Control de Mercado (Añadido para captar Cierres Fuertes)
+    if verde3 and cp3 > 65 and sup3 < 10:
+        patrones.append("📈 VELA VERDE SÓLIDA CERRANDO EN MÁXIMOS (Control Toro Total)")
+    elif not verde3 and cp3 > 65 and inf3 < 10:
+        patrones.append("📉 VELA ROJA SÓLIDA CERRANDO EN MÍNIMOS (Control Oso Total)")
+    elif cp3 < 10:
         patrones.append("⚖️ DOJI")
     elif cp3 < 25 and sup3 > 30 and inf3 > 30:
         patrones.append("🌀 PEONZA")
@@ -171,8 +177,6 @@ def analizar_patron_nison_completo(df, idx):
             patrones.append("🔨 MARTILLO / PINBAR ALCISTA")
         elif sup3 > 65 and cp3 < 25 and inf3 < 10:
             patrones.append("🌠 ESTRELLA FUGAZ / PINBAR BAJISTA")
-        elif cp3 > 85:
-            patrones.append(f"🧱 MARUBOZU {'ALCISTA' if verde3 else 'BAJISTA'}")
 
     if not patrones:
         patrones.append(f"Vela {'Verde' if verde3 else 'Roja'} Estándar")
@@ -188,86 +192,78 @@ def generar_descripcion_nison(df, idx=-2):
     soporte, resistencia, slope, intercept, tendencia, micro = detectar_zonas_mercado(df, idx)
     patron = analizar_patron_nison_completo(df, idx)
 
-    df_reciente = df.iloc[idx-20:] if idx == -1 else df.iloc[idx-20:idx+1]
-    toques_res = (df_reciente['high'] >= resistencia * 0.998).sum()
-    toques_sop = (df_reciente['low'] <= soporte * 1.002).sum()
-    
-    df_mechas = df.iloc[idx-8:] if idx == -1 else df.iloc[idx-8:idx+1]
-    rangos = df_mechas['high'] - df_mechas['low']
-    cuerpos_max = df_mechas[['close', 'open']].max(axis=1)
-    cuerpos_min = df_mechas[['close', 'open']].min(axis=1)
-    
-    mechas_sup = (df_mechas['high'] - cuerpos_max) / rangos.replace(0, 0.001)
-    mechas_inf = (cuerpos_min - df_mechas['low']) / rangos.replace(0, 0.001)
-    
-    mechas_sup_largas = (mechas_sup > 0.55).sum()
-    mechas_inf_largas = (mechas_inf > 0.55).sum()
-
-    zona_actual = "Tierra de nadie (Mitad del rango)"
-    if precio <= soporte + (atr * 2.0): 
-        zona_actual = f"🔥 EN ZONA DE SOPORTE ({soporte:.2f})"
-    elif precio >= resistencia - (atr * 2.0): 
-        zona_actual = f"🚨 EN ZONA DE RESISTENCIA ({resistencia:.2f})"
-
-    interaccion_ema = "Lejos de la EMA20"
-    if vela_actual['low'] <= ema20 <= vela_actual['high']:
-        if precio > ema20:
-            interaccion_ema = "✅ Rechazo desde ABAJO (Soporte Validado)"
+    # Evaluación de Cabalgar EMA y Soportes Dinámicos
+    if precio > ema20:
+        dist_ema = (precio - ema20) / ema20 * 100
+        if vela_actual['low'] <= ema20:
+            interaccion_ema = "✅ Testeando EMA20 desde arriba y rebotando (Soporte Dinámico Confirmado, presión compradora)."
         else:
-            interaccion_ema = "❌ Rechazo desde ARRIBA (Resistencia Validada)"
+            interaccion_ema = f"✅ Cabalgando sobre la EMA20 (+{dist_ema:.2f}% de distancia). Los compradores tienen el control del flujo."
+    else:
+        dist_ema = (ema20 - precio) / ema20 * 100
+        if vela_actual['high'] >= ema20:
+            interaccion_ema = "❌ Testeando EMA20 desde abajo y siendo rechazado (Resistencia Dinámica Confirmada, presión vendedora)."
+        else:
+            interaccion_ema = f"❌ Atrapado bajo la EMA20 (-{dist_ema:.2f}% de distancia). Los vendedores tienen el control del flujo."
+
+    # Evaluación de Rupturas (Throwbacks y Pullbacks)
+    df_reciente = df.iloc[idx-20:] if idx == -1 else df.iloc[idx-20:idx+1]
+    
+    zona_actual = f"El precio actual es {precio:.2f}."
+    if precio > resistencia and vela_actual['low'] <= resistencia * 1.002:
+        zona_actual += " 🔥 RUPTURA CONFIRMADA: Resistencia rota ahora actuando como Soporte (Throwback) con defensa compradora."
+    elif precio < soporte and vela_actual['high'] >= soporte * 0.998:
+        zona_actual += " 🚨 RUPTURA CONFIRMADA: Soporte roto ahora actuando como Resistencia (Pullback) con defensa vendedora."
+    elif precio <= soporte + (atr * 1.5):
+        zona_actual += f" Apoyándose en el suelo clave de {soporte:.2f}."
+    elif precio >= resistencia - (atr * 1.5):
+        zona_actual += f" Chocando contra el techo clave de {resistencia:.2f}."
+    else:
+        zona_actual += " Flotando en el flujo de la tendencia media."
 
     descripcion = f"""
-=== INFORME NISON HOLÍSTICO Y ACUMULADO (BTCUSDT 5m) ===
+=== INFORME PRICE ACTION GLOBAL (NISON & ESTRUCTURA) ===
 
-1. TENDENCIA Y UBICACIÓN
+1. EL FLUJO Y LA TENDENCIA
 - Tendencia Macro: {tendencia} | Micro-Tendencia: {micro}
-- Ubicación Actual: {zona_actual}
-- EMA 20: {interaccion_ema}
+- Relación con Media Móvil: {interaccion_ema}
 
-2. PRESIÓN ACUMULADA Y ESTRUCTURA (La "Historia")
-- Toques a Resistencia (Últimas 20 velas): {toques_res} veces.
-- Toques a Soporte (Últimas 20 velas): {toques_sop} veces.
-- Clúster de Mechas (Últimas 8 velas): 
-  👉 {mechas_sup_largas} velas con mecha superior larga (Presión vendedora oculta).
-  👉 {mechas_inf_largas} velas con mecha inferior larga (Presión compradora oculta).
+2. ZONAS ESTRUCTURALES
+- Soportes/Resistencias: {zona_actual}
+*(Nota: Observa si el precio ha roto una estructura reciente y está continuando, o si está rebotando).*
 
-3. PATRÓN DE VELAS ACTUAL (El "Gatillo")
-- Últimas 3 velas: {patron}
+3. ACCIÓN DEL PRECIO Y VELAS ACTUALES
+- Comportamiento Reciente: {patron}
 """
     return descripcion, atr
 
-# =================== IA GROQ: DECISIONES ===================
+# =================== IA GROQ: DECISIONES DES-SESGADAS ===================
 def analizar_con_groq_texto(descripcion, atr, reglas_aprendidas):
     try:
         system_msg = f"""
-        Eres Steve Nison. Analizas todo el "Bosque" (Presión acumulada) y el "Árbol" (El patrón actual).
-        Toma tu decisión combinando LA ESTRUCTURA (toques y mechas) y EL PATRÓN (Gatillo).
+        Eres un experto Chartista Institucional que sigue fielmente la filosofía de Steve Nison y la Acción del Precio pura.
+        Tu trabajo NO es buscar obsesivamente pequeños rechazos de mechas o reversiones forzadas, sino leer el FLUJO DEL MERCADO de forma holística.
 
         🔥 ATENCIÓN - LECCIÓN APRENDIDA DE TUS ÚLTIMOS TRADES 🔥
         "{reglas_aprendidas}"
-        Debes obedecer esta regla por encima de todo.
 
-        ESCENARIOS:
-        - REVERSIÓN: Rebote comprobado por múltiples mechas/toques en Soporte/EMA + Patrón Gatillo.
-        - CONTINUACIÓN: Tendencia fuerte avanzando sin resistencias cercanas a la vista.
-        - ROMPIMIENTO: Vela gigante rompiendo un nivel de múltiples toques.
+        LÓGICA DE DECISIÓN HOLÍSTICA:
+        1. TENDENCIA Y EMA: Si el gráfico muestra una tendencia alcista clara, el precio cabalga sobre la EMA20, o acaba de romper una resistencia (con throwback), tu deber es seguir la tendencia (BUY).
+        2. CONTROL DE LA VELA: Si la última vela es verde, sólida, y cierra cerca de su máximo, los toros controlan. NO busques shorts falsos si no hay un patrón de reversión evidente (Estrella Fugaz/Evening Star).
+        3. REVERSIONES: Solo opera en contra del movimiento si ves un choque evidente en resistencia con un rechazo bajista fuerte, o en soporte con un rechazo alcista.
+        4. No tengas miedo a comprar si todo el contexto indica continuación.
 
-        Fija objetivos realistas para scalping en 5m:
-        - sl_mult: 0.8 a 1.5
-        - tp1_mult: 1.0 a 1.5 (Asegura rápido el 50% y pone SL a Breakeven)
-        - trailing_mult: 1.5 a 2.0 (Deja correr el resto)
-
-        Responde ÚNICAMENTE con un JSON válido:
+        Responde ÚNICAMENTE con un JSON válido en este formato:
         {{
           "decision": "Buy/Sell/Hold",
-          "patron": "Ej: Clúster de 4 mechas bajistas en Resistencia + Estrella Fugaz",
-          "razones": ["Razón estructura", "Razón patrón/EMA"],
+          "patron": "Explica la estructura global. Ej: Tendencia alcista + Cabalgando EMA20 + Cierre Toro Sólido",
+          "razones": ["Razón de estructura general", "Razón de velas/EMA"],
           "sl_mult": 1.2,
-          "tp1_mult": 1.3,
+          "tp1_mult": 1.5,
           "trailing_mult": 1.8
         }}
         """
-        user_msg = f"{descripcion}\n\nATR: {atr:.2f}. Lee la Presión, aplica tus reglas aprendidas, y toma una decisión."
+        user_msg = f"{descripcion}\n\nATR: {atr:.2f}. Lee el panorama completo, no te estanques en detalles aislados. Determina el movimiento de mayor probabilidad."
         
         respuesta = client.chat.completions.create(
             model=MODELO_TEXTO,
@@ -303,21 +299,20 @@ def aprender_de_trades():
     losses = 10 - wins
     winrate = wins / 10.0
     
-    # Preparamos el resumen para Groq
     resumen_trades = ""
     for i, t in enumerate(ultimos):
         estado = "WIN ✅" if t['resultado_win'] else "LOSS ❌"
         resumen_trades += f"Trade {i+1} ({estado}): {t['decision'].upper()} | Gatillo: {t.get('patron', 'Desconocido')} | PnL: {t['pnl']:.2f}\n"
 
     system_msg = """
-    Eres el Mentor de Trading de una Inteligencia Artificial.
+    Eres el Mentor de Trading de una Inteligencia Artificial orientada al Price Action.
     Tu objetivo es revisar los últimos 10 trades de tu alumno y decirle en qué se equivocó y qué hizo bien.
-    Encuentra el patrón común de las pérdidas y formula una nueva "Regla de Oro".
+    Encuentra el patrón común de las pérdidas (ej. ignorar la tendencia principal, SL muy corto) y formula una nueva "Regla de Oro" holística.
     
     Responde ÚNICAMENTE con un JSON válido:
     {
       "analisis": "Breve explicación de por qué ganamos o perdimos estos trades",
-      "nueva_regla": "Instrucción de 1 o 2 oraciones para aplicar en el futuro y no repetir errores",
+      "nueva_regla": "Instrucción clara de 1 o 2 oraciones para no repetir errores y seguir el flujo del mercado",
       "sl_mult_sugerido": 1.5,
       "tp1_mult_sugerido": 1.5,
       "trailing_mult_sugerido": 1.8
@@ -379,7 +374,7 @@ def generar_grafico(df, decision, razones, patron, soporte, resistencia, slope, 
     if tipo == "Entrada":
         p_act = df_plot['close'].iloc[-2]
         ax.scatter(len(df_plot)-2, p_act + (-30 if decision=='Buy' else 30), s=400, marker='^' if decision=='Buy' else 'v', c='lime' if decision=='Buy' else 'red', zorder=5)
-        txt = f"DECISIÓN: {decision.upper()}\nPatrón y Contexto: {patron}\nSL mult: {sl_m:.2f} | TP1 mult: {tp1_m:.2f} | Trail mult: {trail_m:.2f}\nRazones:\n" + "\n".join(razones[:2])
+        txt = f"DECISIÓN: {decision.upper()}\nPanorama Global: {patron}\nSL mult: {sl_m:.2f} | TP1 mult: {tp1_m:.2f} | Trail mult: {trail_m:.2f}\nRazones:\n" + "\n".join(razones[:2])
     else:
         p_ent, p_sal, win, pnl = salida_data
         ax.axhline(p_ent, color='blue', ls=':', lw=2, label='Precio de Entrada')
@@ -416,7 +411,6 @@ def paper_abrir_posicion(decision, precio, atr, razones, patron, multis_ia):
     global PAPER_SIZE_BTC, PAPER_SIZE_BTC_RESTANTE, PAPER_TP1_EJECUTADO, PAPER_SL_ACTUAL, ULTIMOS_MULTIS, PAPER_MAX_PRECIO_ALCANZADO
     if PAPER_POSICION_ACTIVA: return False
     
-    # 60% peso IA análisis vela + 40% peso Aprendizaje a Largo Plazo
     sl_m = (multis_ia[0] * 0.6) + (ADAPTIVE_SL_MULT * 0.4)
     tp_m = (multis_ia[1] * 0.6) + (ADAPTIVE_TP1_MULT * 0.4)
     tr_m = (multis_ia[2] * 0.6) + (ADAPTIVE_TRAILING_MULT * 0.4)
@@ -445,7 +439,7 @@ Entrada: {precio:.2f}
 🛑 Stop Loss: {PAPER_SL_INICIAL:.2f} (Distancia: {sl_m:.2f}x ATR)
 🔄 Trailing Dinámico: {tr_m:.2f}x ATR
 📊 Tamaño: {PAPER_SIZE_BTC:.4f} BTC
-🔍 Motivo: {patron}"""
+🔍 Panorama: {patron}"""
     telegram_mensaje(msg)
     return True
 
@@ -501,7 +495,6 @@ def paper_revisar_sl_tp(df, sop, res, slo, inter):
         if win: PAPER_WIN += 1 
         else: PAPER_LOSS += 1
         
-        # Guardamos el resultado junto con el patrón que detonó el trade
         TRADE_HISTORY.append({
             "fecha": datetime.now(timezone.utc).isoformat(),
             "decision": PAPER_POSICION_ACTIVA,
@@ -510,8 +503,7 @@ def paper_revisar_sl_tp(df, sop, res, slo, inter):
             "resultado_win": win
         })
         
-        # Disparamos el aprendizaje si llegamos a múltiplo de 10
-        if PAPER_TRADES_TOTALES % 10 == 0:
+        if PAPER_TRADES_TOTALES > 0 and PAPER_TRADES_TOTALES % 10 == 0:
             aprender_de_trades()
             
         msg = f"""📤 POSICIÓN CERRADA ({motivo})
@@ -533,8 +525,8 @@ Precio de Salida: {PAPER_SL_ACTUAL:.2f}
 # =================== LOOP PRINCIPAL ===================
 def run_bot():
     global ULTIMA_DECISION, ULTIMO_MOTIVO, ULTIMA_RAZONES, ULTIMO_PATRON
-    print("🤖 BOT V99.27 INICIADO - Tu versión base + Inteligencia Evolutiva")
-    telegram_mensaje("🤖 BOT V99.27 INICIADO - Evolución IA activada (Aprendizaje cada 10 trades)")
+    print("🤖 BOT V99.28 INICIADO - Enfoque Holístico Des-Sesgado + IA Evolutiva")
+    telegram_mensaje("🤖 BOT V99.28 INICIADO - Monitoreando Estructura, Tendencia y Velas Sólidas.")
     
     ultima_vela = None
     while True:
@@ -555,8 +547,8 @@ def run_bot():
             if PAPER_POSICION_ACTIVA is None and ultima_vela != vela_cerrada:
                 desc, atr_val = generar_descripcion_nison(df)
                 print(f"--- Escaneando Vela Cerrada: {vela_cerrada.strftime('%H:%M')} ---")
+                print(f"📝 Reporte generado:\n{desc}\n")
                 
-                # Pasamos la nueva regla aprendida a la IA para que la aplique
                 decision, razones, patron, multis = analizar_con_groq_texto(desc, atr_val, REGLAS_APRENDIDAS)
                 ULTIMA_DECISION = decision
                 ULTIMO_MOTIVO = razones[0] if razones else "Sin razones"
@@ -567,7 +559,7 @@ def run_bot():
                     if paper_abrir_posicion(decision, precio, atr_val, razones, patron, multis):
                         ultima_vela = vela_cerrada
                         ruta_img = generar_grafico(df, decision, razones, patron, sop, res, slo, inter, multis, "Entrada")
-                        telegram_enviar_imagen(ruta_img, f"🚀 SEÑAL CONFIRMADA: {decision.upper()}\nContexto: {patron}\nEstructura: {razones[0]}")
+                        telegram_enviar_imagen(ruta_img, f"🚀 SEÑAL CONFIRMADA: {decision.upper()}\nPanorama Global: {patron}\n{razones[0]}")
                 else:
                     print(f"⏸️ Se mantiene Hold. Motivo: {ULTIMO_MOTIVO[:80]}...")
                     ultima_vela = vela_cerrada

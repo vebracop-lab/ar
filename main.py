@@ -14,6 +14,66 @@ if not GROQ_API_KEY:
 client = Groq(api_key=GROQ_API_KEY)
 MODELO_TEXTO = "openai/gpt-oss-120b"
 
+# ====== MEJORAS IA (MEMORIA + JSON ROBUSTO) ======
+MEMORY_FILE = "memoria_bot.json"
+
+def guardar_memoria():
+    data = {
+        "TRADE_HISTORY": TRADE_HISTORY,
+        "REGLAS_APRENDIDAS": REGLAS_APRENDIDAS,
+        "ADAPTIVE_SL_MULT": ADAPTIVE_SL_MULT,
+        "ADAPTIVE_TP1_MULT": ADAPTIVE_TP1_MULT,
+        "ADAPTIVE_TRAILING_MULT": ADAPTIVE_TRAILING_MULT,
+        "PAPER_BALANCE": PAPER_BALANCE,
+        "PAPER_WIN": PAPER_WIN,
+        "PAPER_LOSS": PAPER_LOSS,
+        "PAPER_TRADES_TOTALES": PAPER_TRADES_TOTALES
+    }
+    try:
+        with open(MEMORY_FILE, "w") as f:
+            json.dump(data, f, indent=4)
+    except Exception as e:
+        print("Error guardando memoria:", e)
+
+def cargar_memoria():
+    global TRADE_HISTORY, REGLAS_APRENDIDAS
+    global ADAPTIVE_SL_MULT, ADAPTIVE_TP1_MULT, ADAPTIVE_TRAILING_MULT
+    global PAPER_BALANCE, PAPER_WIN, PAPER_LOSS, PAPER_TRADES_TOTALES
+
+    if not os.path.exists(MEMORY_FILE):
+        return
+    try:
+        with open(MEMORY_FILE, "r") as f:
+            data = json.load(f)
+
+        TRADE_HISTORY = data.get("TRADE_HISTORY", [])
+        REGLAS_APRENDIDAS = data.get("REGLAS_APRENDIDAS", REGLAS_APRENDIDAS)
+        ADAPTIVE_SL_MULT = data.get("ADAPTIVE_SL_MULT", ADAPTIVE_SL_MULT)
+        ADAPTIVE_TP1_MULT = data.get("ADAPTIVE_TP1_MULT", ADAPTIVE_TP1_MULT)
+        ADAPTIVE_TRAILING_MULT = data.get("ADAPTIVE_TRAILING_MULT", ADAPTIVE_TRAILING_MULT)
+        PAPER_BALANCE = data.get("PAPER_BALANCE", PAPER_BALANCE)
+        PAPER_WIN = data.get("PAPER_WIN", 0)
+        PAPER_LOSS = data.get("PAPER_LOSS", 0)
+        PAPER_TRADES_TOTALES = data.get("PAPER_TRADES_TOTALES", 0)
+
+        print("🧠 Memoria cargada")
+    except Exception as e:
+        print("Error cargando memoria:", e)
+
+def parse_json_seguro(raw):
+    try:
+        match = re.search(r'\{.*\}', raw, re.DOTALL)
+        json_str = match.group(0) if match else raw
+        json_str = re.sub(r'[\x00-\x1f\x7f]', '', json_str)
+        json_str = json_str.replace("'", '"')
+        return json.loads(json_str)
+    except Exception as e:
+        print("⚠️ Error JSON:", e)
+        print("RAW:", raw)
+        return None
+# =================================================
+
+
 SYMBOL = "BTCUSDT"
 INTERVAL = "5"
 RISK_PER_TRADE = 0.02
@@ -258,7 +318,9 @@ def analizar_con_groq_texto(descripcion, atr, reglas_aprendidas):
         )
         raw = respuesta.choices[0].message.content
         match = re.search(r'\{.*\}', raw, re.DOTALL)
-        datos = json.loads(re.sub(r'[\x00-\x1f\x7f]', '', match.group(0) if match else raw))
+        datos = parse_json_seguro(raw)
+        if not datos:
+            return "Hold", ["JSON inválido"], "", (DEFAULT_SL_MULT, DEFAULT_TP1_MULT, DEFAULT_TRAILING_MULT)
         
         decision = datos.get("decision", "Hold")
         sl_m = max(0.5, min(2.5, float(datos.get("sl_mult", 1.2))))
@@ -283,7 +345,8 @@ def aprender_de_trades():
     resumen_trades = ""
     for i, t in enumerate(ultimos):
         estado = "WIN ✅" if t['resultado_win'] else "LOSS ❌"
-        resumen_trades += f"Trade {i+1} ({estado}): {t['decision'].upper()} | {t.get('patron', 'Desconocido')} | PnL: {t['pnl']:.2f}\n"
+        resumen_trades += f"Trade {i+1} ({estado})
+            guardar_memoria(): {t['decision'].upper()} | {t.get('patron', 'Desconocido')} | PnL: {t['pnl']:.2f}\n"
 
     system_msg = """
     Eres el Mentor de Trading de una IA. Analiza los últimos 10 trades.
@@ -302,7 +365,9 @@ def aprender_de_trades():
         respuesta = client.chat.completions.create(model=MODELO_TEXTO, messages=[{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}], temperature=0.3, max_tokens=500)
         raw = respuesta.choices[0].message.content
         match = re.search(r'\{.*\}', raw, re.DOTALL)
-        datos = json.loads(re.sub(r'[\x00-\x1f\x7f]', '', match.group(0) if match else raw))
+        datos = parse_json_seguro(raw)
+        if not datos:
+            return "Hold", ["JSON inválido"], "", (DEFAULT_SL_MULT, DEFAULT_TP1_MULT, DEFAULT_TRAILING_MULT)
         
         analisis = datos.get("analisis", "Análisis completado.")
         REGLAS_APRENDIDAS = datos.get("nueva_regla", REGLAS_APRENDIDAS)
@@ -453,7 +518,8 @@ def paper_revisar_sl_tp(df, sop, res, slo, inter):
                 t['tp1_ejecutado'] = True
                 t['sl_actual'] = t['entrada']
                 
-                msg_tp1 = f"🎯 [TRADE #{t_id}] ¡TP1 ALCANZADO!\nSe cerró el 50% asegurando +{beneficio:.2f} USD.\n🛡️ SL movido a Break-Even ({t['entrada']:.2f})."
+                msg_tp1 = f"🎯 [TRADE #{t_id}] ¡TP1 ALCANZADO!\nSe cerró el 50% asegurando +{beneficio:.2f} USD.\n🛡️ SL movido a Break-Even ({t['entrada']:.2f})
+            guardar_memoria()."
                 telegram_mensaje(msg_tp1); print(msg_tp1)
                 
         # 2. Trailing Stop
@@ -492,8 +558,10 @@ def paper_revisar_sl_tp(df, sop, res, slo, inter):
                 "pnl": pnl_total,
                 "resultado_win": win
             })
+            guardar_memoria()
             
-            msg_cierre = f"📤 [TRADE #{t_id}] CERRADO ({motivo})\nDirección: {t['decision'].upper()}\nSalida: {t['sl_actual']:.2f}\n💰 PnL Total: {pnl_total:.2f} USD\n🏦 Balance: {PAPER_BALANCE:.2f} USD"
+            msg_cierre = f"📤 [TRADE #{t_id}] CERRADO ({motivo})
+            guardar_memoria()\nDirección: {t['decision'].upper()}\nSalida: {t['sl_actual']:.2f}\n💰 PnL Total: {pnl_total:.2f} USD\n🏦 Balance: {PAPER_BALANCE:.2f} USD"
             telegram_mensaje(msg_cierre); print(msg_cierre)
             
             ruta_img = generar_grafico(df, t, sop, res, slo, inter, "Salida")
@@ -509,6 +577,7 @@ def paper_revisar_sl_tp(df, sop, res, slo, inter):
 # =================== LOOP PRINCIPAL ===================
 def run_bot():
     global ULTIMA_DECISION, ULTIMO_MOTIVO
+    cargar_memoria()
     print("🤖 BOT V99.32 INICIADO - Multi-Trades y Detección de Barridos (Liquidity Sweeps)")
     telegram_mensaje("🤖 BOT V99.32 INICIADO - Sistema Multi-Trades Activado.")
     

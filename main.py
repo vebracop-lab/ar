@@ -1,5 +1,9 @@
 # BOT TRADING V99.32 – GROQ (MULTI-TRADES + BARRIDOS DE LIQUIDEZ/FAKEOUTS)
 # ==============================================================================
+# MEJORAS INCORPORADAS:
+# 1. Refuerzo para que NUNCA se usen velas no cerradas en patrones (índice -1)
+# 2. Detección de rango extremadamente estrecho (mercado comprimido) y forzar Hold
+# ==============================================================================
 import os, time, requests, json, re, numpy as np, pandas as pd
 from scipy.stats import linregress
 from datetime import datetime, timezone
@@ -51,7 +55,7 @@ ULTIMO_APRENDIZAJE = 0
 REGLAS_APRENDIDAS = "Aún no hay trades suficientes. Busca confluencia y trampas de liquidez."
 
 ULTIMA_DECISION = "Hold"
-ULTIMA_MOTIVO = "Esperando señal"
+ULTIMO_MOTIVO = "Esperando señal"
 
 # =================== COMUNICACIÓN ===================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -117,6 +121,11 @@ def analizar_anatomia_vela(v):
     return f"{color} (Cuerpo:{c_pct:.0f}% | M.Sup:{s_sup:.0f}% | M.Inf:{s_inf:.0f}%)"
 
 def analizar_patrones_conjuntos(df, idx):
+    # MEJORA: Si por error se pasa idx=-1 (vela actual abierta), forzar a -2 (última cerrada)
+    if idx == -1:
+        idx = -2
+        print("⚠️ ADVERTENCIA: Se intentó analizar patrón con vela actual (abierta). Forzado a vela cerrada (índice -2).")
+    
     if idx < 3: return "Datos insuficientes"
     v3, v2, v1 = df.iloc[idx], df.iloc[idx-1], df.iloc[idx-2]
     
@@ -145,6 +154,7 @@ def analizar_patrones_conjuntos(df, idx):
     return " | ".join(patrones) if patrones else "Formación de consolidación normal"
 
 def generar_descripcion_nison(df, idx=-2):
+    # idx = -2 por defecto -> vela completamente cerrada
     vela_actual = df.iloc[idx]
     precio = vela_actual['close']
     atr = df['atr'].iloc[idx]
@@ -180,13 +190,10 @@ def generar_descripcion_nison(df, idx=-2):
     toques_sop = (df_reciente['low'] <= soporte * 1.002).sum()
     
     polaridad = f"Precio actual: {precio:.2f}. "
-    # Detectando "Spring" (Falso quiebre bajista)
     if vela_actual['low'] < soporte and precio > soporte:
         polaridad += f"🔥 BARRIDO EN SOPORTE (SPRING): Perforó el soporte de {soporte:.2f} quitando liquidez, pero regresó arriba. Alta probabilidad alcista."
-    # Detectando "Upthrust" (Falso quiebre alcista)
     elif vela_actual['high'] > resistencia and precio < resistencia:
         polaridad += f"🚨 BARRIDO EN RESISTENCIA (UPTHRUST): Perforó la resistencia de {resistencia:.2f} quitando liquidez, pero regresó abajo. Alta probabilidad bajista."
-    # Flips normales
     elif precio > resistencia and vela_actual['low'] <= resistencia * 1.005:
         polaridad += f"POLARIDAD ALCISTA: Acaba de romper resistencia y la testea como SOPORTE (Throwback)."
     elif precio < soporte and vela_actual['high'] >= soporte * 0.995:
@@ -223,6 +230,21 @@ def generar_descripcion_nison(df, idx=-2):
 - Lectura: {patrones_generales}
 """
     return descripcion, atr
+
+# =================== DETECCIÓN DE MERCADO COMPRIMIDO (RANGO EXTREMADAMENTE ESTRECHO) ===================
+def es_rango_estrecho(df, soporte, resistencia, atr, tendencia):
+    """
+    Retorna True si el mercado está excesivamente comprimido (rango entre soporte y resistencia
+    es menor que 1.5 veces el ATR) y la tendencia macro es lateral.
+    En esos casos no hay margen para operar y se debe forzar Hold.
+    """
+    if tendencia != "LATERAL":
+        return False
+    ancho_rango = resistencia - soporte
+    if ancho_rango <= 0 or atr <= 0:
+        return False
+    # Si el ancho del rango es menor a 1.5 veces el ATR, está muy comprimido
+    return ancho_rango < (1.5 * atr)
 
 # =================== IA GROQ: DECISIÓN MATRIZ TOTAL ===================
 def analizar_con_groq_texto(descripcion, atr, reglas_aprendidas):
@@ -376,9 +398,8 @@ def risk_management_check():
 def paper_abrir_posicion(decision, precio, atr, razones, patron, multis_ia, df, sop, res, slo, inter):
     global PAPER_BALANCE, TRADE_COUNTER
     if len(PAPER_ACTIVE_TRADES) >= MAX_CONCURRENT_TRADES: 
-        return False # Límite alcanzado
+        return False
     
-    # Prevenir abrir el mismo trade exacto en la misma dirección a la misma vez
     for t in PAPER_ACTIVE_TRADES.values():
         if t['decision'] == decision and abs(t['entrada'] - precio) < atr * 0.2:
             return False 
@@ -439,11 +460,9 @@ def paper_revisar_sl_tp(df, sop, res, slo, inter):
         cerrar = False
         motivo = ""
         
-        # Actualizar precio máximo para trailing
         if t['decision'] == "Buy": t['max_precio'] = max(t['max_precio'], h)
         else: t['max_precio'] = min(t['max_precio'], l)
         
-        # 1. TP1 Fijo
         if not t['tp1_ejecutado']:
             if (t['decision'] == "Buy" and h >= t['tp1']) or (t['decision'] == "Sell" and l <= t['tp1']):
                 beneficio = abs(t['tp1'] - t['entrada']) * (t['size_btc'] * PORCENTAJE_CIERRE_TP1)
@@ -456,7 +475,6 @@ def paper_revisar_sl_tp(df, sop, res, slo, inter):
                 msg_tp1 = f"🎯 [TRADE #{t_id}] ¡TP1 ALCANZADO!\nSe cerró el 50% asegurando +{beneficio:.2f} USD.\n🛡️ SL movido a Break-Even ({t['entrada']:.2f})."
                 telegram_mensaje(msg_tp1); print(msg_tp1)
                 
-        # 2. Trailing Stop
         if t['tp1_ejecutado']:
             n_sl = t['max_precio'] - (t['atr_entrada'] * t['trailing_mult']) if t['decision'] == "Buy" else t['max_precio'] + (t['atr_entrada'] * t['trailing_mult'])
             
@@ -471,7 +489,6 @@ def paper_revisar_sl_tp(df, sop, res, slo, inter):
             if (t['decision'] == "Buy" and l <= t['sl_inicial']) or (t['decision'] == "Sell" and h >= t['sl_inicial']):
                 cerrar = True; motivo = "Stop Loss Inicial"; t['sl_actual'] = t['sl_inicial']
 
-        # 3. Cierre
         if cerrar:
             pnl_rest = (t['sl_actual'] - t['entrada']) * t['size_restante'] if t['decision'] == "Buy" else (t['entrada'] - t['sl_actual']) * t['size_restante']
             pnl_total = t['pnl_parcial'] + pnl_rest
@@ -499,7 +516,6 @@ def paper_revisar_sl_tp(df, sop, res, slo, inter):
             ruta_img = generar_grafico(df, t, sop, res, slo, inter, "Salida")
             telegram_enviar_imagen(ruta_img, msg_cierre)
 
-    # Eliminar trades cerrados del diccionario activo
     for t_id in trades_a_cerrar:
         del PAPER_ACTIVE_TRADES[t_id]
         
@@ -529,11 +545,19 @@ def run_bot():
             
             # Evaluación Constante (Limitada por MAX_CONCURRENT_TRADES)
             if activos_count < MAX_CONCURRENT_TRADES and ultima_vela != vela_cerrada:
-                desc, atr_val = generar_descripcion_nison(df)
+                desc, atr_val = generar_descripcion_nison(df)  # idx=-2 por defecto -> vela cerrada
                 print(f"--- Evaluando Matriz de Vela: {vela_cerrada.strftime('%H:%M')} ---")
                 
                 decision, razones, patron, multis = analizar_con_groq_texto(desc, atr_val, REGLAS_APRENDIDAS)
                 ULTIMA_DECISION, ULTIMO_MOTIVO = decision, razones[0] if razones else "Sin razones"
+                
+                # MEJORA: Detectar mercado extremadamente comprimido (rango muy estrecho) y forzar Hold
+                if es_rango_estrecho(df, sop, res, atr, tend):
+                    decision = "Hold"
+                    razones = ["Mercado extremadamente lateral/comprimido. Sin margen para operar. Esperar expansión."]
+                    ULTIMO_MOTIVO = razones[0]
+                    print(f"⏸️ RANGO ESTRECHO detectado: {res - sop:.2f} USD (ATR={atr:.2f}). Forzando Hold.")
+                    telegram_mensaje(f"⚠️ RANGO EXTREMADAMENTE ESTRECHO: Soporte={sop:.2f} Resistencia={res:.2f} (Ancho={res-sop:.2f} < 1.5*ATR). Operaciones desactivadas hasta que haya expansión.")
                 
                 if decision in ["Buy","Sell"] and risk_management_check():
                     paper_abrir_posicion(decision, precio, atr_val, razones, patron, multis, df, sop, res, slo, inter)
@@ -544,7 +568,7 @@ def run_bot():
             
             # Revisión de Trades Activos
             if PAPER_ACTIVE_TRADES:
-                sop, res, slo, inter, _, _ = detectar_zonas_mercado(df, -1) # Zonas actualizadas al tick
+                sop, res, slo, inter, _, _ = detectar_zonas_mercado(df, -1)
                 paper_revisar_sl_tp(df, sop, res, slo, inter)
             
             time.sleep(SLEEP_SECONDS)

@@ -1,8 +1,8 @@
 # BOT TRADING V99.32 – GROQ (MULTI-TRADES + BARRIDOS DE LIQUIDEZ/FAKEOUTS)
 # ==============================================================================
 # MEJORAS INCORPORADAS:
-# 1. Refuerzo para que NUNCA se usen velas no cerradas en patrones (índice -1)
-# 2. Detección de rango extremadamente estrecho (mercado comprimido) y forzar Hold
+# 1. Detección de consolidación estrecha local (últimas 10 velas) para evitar falsos barridos en rangos laterales.
+# 2. Refuerzo de conceptos de Price Action en el prompt de la IA (conversión de roles, agotamiento, etc.).
 # ==============================================================================
 import os, time, requests, json, re, numpy as np, pandas as pd
 from scipy.stats import linregress
@@ -24,18 +24,18 @@ RISK_PER_TRADE = 0.02
 LEVERAGE = 10
 SLEEP_SECONDS = 60
 GRAFICO_VELAS_LIMIT = 120
-MAX_CONCURRENT_TRADES = 3  # Límite de trades abiertos al mismo tiempo
+MAX_CONCURRENT_TRADES = 3
 
 DEFAULT_SL_MULT = 1.2
 DEFAULT_TP1_MULT = 1.5
 DEFAULT_TRAILING_MULT = 1.8
 PORCENTAJE_CIERRE_TP1 = 0.5
 
-# =================== PAPER TRADING (SISTEMA MULTI-TRADE) ===================
+# =================== PAPER TRADING ===================
 PAPER_BALANCE_INICIAL = 100.0
 PAPER_BALANCE = PAPER_BALANCE_INICIAL
-PAPER_ACTIVE_TRADES = {}  # Diccionario para almacenar múltiples trades
-TRADE_COUNTER = 0         # ID autoincremental para organizar los logs
+PAPER_ACTIVE_TRADES = {}
+TRADE_COUNTER = 0
 
 PAPER_WIN = 0
 PAPER_LOSS = 0
@@ -47,7 +47,6 @@ PAPER_DAILY_START_BALANCE = PAPER_BALANCE_INICIAL
 PAPER_STOPPED_TODAY = False
 PAPER_CURRENT_DAY = None
 
-# Variables de Autoaprendizaje Evolutivo
 ADAPTIVE_SL_MULT = DEFAULT_SL_MULT
 ADAPTIVE_TP1_MULT = DEFAULT_TP1_MULT
 ADAPTIVE_TRAILING_MULT = DEFAULT_TRAILING_MULT
@@ -110,7 +109,7 @@ def detectar_zonas_mercado(df, idx=-2, ventana_macro=120):
     tendencia = 'ALCISTA' if slope > 0.01 else 'BAJISTA' if slope < -0.01 else 'LATERAL'
     return soporte, resistencia, slope, intercept, tendencia, micro_tendencia
 
-# =================== MOTOR HOLÍSTICO Y BARRIDOS DE LIQUIDEZ ===================
+# =================== MOTOR HOLÍSTICO Y BARRIDOS ===================
 def analizar_anatomia_vela(v):
     rango = v['high'] - v['low']
     if rango == 0: return "Doji Plano (0%)"
@@ -121,11 +120,6 @@ def analizar_anatomia_vela(v):
     return f"{color} (Cuerpo:{c_pct:.0f}% | M.Sup:{s_sup:.0f}% | M.Inf:{s_inf:.0f}%)"
 
 def analizar_patrones_conjuntos(df, idx):
-    # MEJORA: Si por error se pasa idx=-1 (vela actual abierta), forzar a -2 (última cerrada)
-    if idx == -1:
-        idx = -2
-        print("⚠️ ADVERTENCIA: Se intentó analizar patrón con vela actual (abierta). Forzado a vela cerrada (índice -2).")
-    
     if idx < 3: return "Datos insuficientes"
     v3, v2, v1 = df.iloc[idx], df.iloc[idx-1], df.iloc[idx-2]
     
@@ -154,7 +148,6 @@ def analizar_patrones_conjuntos(df, idx):
     return " | ".join(patrones) if patrones else "Formación de consolidación normal"
 
 def generar_descripcion_nison(df, idx=-2):
-    # idx = -2 por defecto -> vela completamente cerrada
     vela_actual = df.iloc[idx]
     precio = vela_actual['close']
     atr = df['atr'].iloc[idx]
@@ -167,24 +160,22 @@ def generar_descripcion_nison(df, idx=-2):
     anat_v2 = analizar_anatomia_vela(df.iloc[idx-1])
     anat_v3 = analizar_anatomia_vela(df.iloc[idx])
 
-    # 1. EMA: DETECCIÓN DE BARRIDOS DE LIQUIDEZ (FAKEOUTS)
     margen_fakeout = atr * 0.4
     if precio > ema20:
         if vela_actual['low'] < (ema20 - margen_fakeout):
-            rol_ema = "🔥 BARRIDO DE LIQUIDEZ EN EMA20: La mecha perforó profundo hacia abajo atrapando vendedores (cazando stops), pero cerró por encima. Fuerte rechazo alcista."
+            rol_ema = "🔥 BARRIDO DE LIQUIDEZ EN EMA20: La mecha perforó profundo hacia abajo atrapando vendedores, pero cerró por encima. Fuerte rechazo alcista."
         elif vela_actual['low'] <= ema20:
             rol_ema = "✅ EMA20 actuando como SOPORTE DINÁMICO normal."
         else:
             rol_ema = "Cabalgando SOBRE la EMA20 (Fuerza Compradora Dominante)."
     else:
         if vela_actual['high'] > (ema20 + margen_fakeout):
-            rol_ema = "🔥 BARRIDO DE LIQUIDEZ EN EMA20: La mecha perforó profundo hacia arriba atrapando compradores (cazando stops), pero cerró por debajo. Fuerte rechazo bajista."
+            rol_ema = "🔥 BARRIDO DE LIQUIDEZ EN EMA20: La mecha perforó profundo hacia arriba atrapando compradores, pero cerró por debajo. Fuerte rechazo bajista."
         elif vela_actual['high'] >= ema20:
             rol_ema = "❌ EMA20 actuando como RESISTENCIA DINÁMICA normal."
         else:
             rol_ema = "Presionado BAJO la EMA20 (Fuerza Vendedora Dominante)."
 
-    # 2. ESTRUCTURA: BARRIDOS EN SOPORTE/RESISTENCIA
     df_reciente = df.iloc[idx-20:] if idx == -1 else df.iloc[idx-20:idx+1]
     toques_res = (df_reciente['high'] >= resistencia * 0.998).sum()
     toques_sop = (df_reciente['low'] <= soporte * 1.002).sum()
@@ -231,28 +222,44 @@ def generar_descripcion_nison(df, idx=-2):
 """
     return descripcion, atr
 
-# =================== DETECCIÓN DE MERCADO COMPRIMIDO (RANGO EXTREMADAMENTE ESTRECHO) ===================
-def es_rango_estrecho(df, soporte, resistencia, atr, tendencia):
+# =================== MEJORA: DETECCIÓN DE CONSOLIDACIÓN ESTRECHA LOCAL ===================
+def es_consolidacion_estrecha(df, atr):
     """
-    Retorna True si el mercado está excesivamente comprimido (rango entre soporte y resistencia
-    es menor que 1.5 veces el ATR) y la tendencia macro es lateral.
-    En esos casos no hay margen para operar y se debe forzar Hold.
+    Detecta si las últimas 10 velas forman un rango muy pequeño (menos de 1.2 * ATR)
+    y además el precio está pegado a la EMA20 (distancia < 0.3 * ATR).
+    En ese caso, el mercado está comprimido sin dirección, y cualquier señal de barrido es falsa.
     """
-    if tendencia != "LATERAL":
+    if len(df) < 10:
         return False
-    ancho_rango = resistencia - soporte
-    if ancho_rango <= 0 or atr <= 0:
+    ultimas_10 = df.iloc[-10:]
+    rango_local = ultimas_10['high'].max() - ultimas_10['low'].min()
+    if rango_local <= 0 or atr <= 0:
         return False
-    # Si el ancho del rango es menor a 1.5 veces el ATR, está muy comprimido
-    return ancho_rango < (1.5 * atr)
+    # Si el rango de las últimas 10 velas es menor a 1.2 veces el ATR
+    if rango_local < 1.2 * atr:
+        # Además, ver si el precio está cerca de la EMA20 (distancia < 0.3 * ATR)
+        precio_actual = df['close'].iloc[-1]
+        ema20_actual = df['ema20'].iloc[-1]
+        distancia_ema = abs(precio_actual - ema20_actual)
+        if distancia_ema < 0.3 * atr:
+            return True
+    return False
 
-# =================== IA GROQ: DECISIÓN MATRIZ TOTAL ===================
+# =================== IA GROQ: DECISIÓN MATRIZ TOTAL (CON CONCEPTOS REFORZADOS) ===================
 def analizar_con_groq_texto(descripcion, atr, reglas_aprendidas):
     try:
+        # MEJORA: Prompt con recordatorios de conceptos clave de Price Action
         system_msg = f"""
         Eres un Maestro del Price Action. Lees la "MATRIZ DE CONFLUENCIA" de forma holística.
         Entiendes que los Soportes, Resistencias y EMAs NO SON LÍNEAS EXACTAS.
         Si el mercado "perfora" una zona pero el cuerpo de la vela cierra devolviéndose (Barrido de Liquidez / Fakeout), sabes que es una confirmación enorme, porque han cazado los Stop Loss de los novatos.
+
+        🔥 RECORDATORIOS CLAVE DE PRICE ACTION (NO LOS OLVIDES):
+        - La EMA20 actúa como SOPORTE cuando el precio está por encima, y como RESISTENCIA cuando está por debajo. Un simple toque sin mecha larga NO es un barrido.
+        - Una acumulación de mechas largas cerca de un nivel indica AGOTAMIENTO (los toros u osos no pueden mantener el precio).
+        - Cuando un SOPORTE se rompe, se convierte en RESISTENCIA (y viceversa). Respeta la conversión de roles.
+        - Las falsas rupturas (barridos) son señales muy fuertes en dirección contraria a la mecha, pero solo si hay contexto de tendencia o acumulación previa.
+        - En consolidaciones extremadamente estrechas (rango muy pequeño), NO hay barridos reales. Espera expansión.
 
         🔥 REGLA EVOLUTIVA DE TU MENTOR:
         "{reglas_aprendidas}"
@@ -543,21 +550,22 @@ def run_bot():
             
             print(f"\n💓 Heartbeat | P: {precio:.2f} | ATR: {atr:.2f} | Trades Activos: {activos_count}/{MAX_CONCURRENT_TRADES} | Cerrados: {PAPER_TRADES_TOTALES} | PnL: {pnl_global:+.2f} | Winrate: {winrate:.1f}%")
             
-            # Evaluación Constante (Limitada por MAX_CONCURRENT_TRADES)
             if activos_count < MAX_CONCURRENT_TRADES and ultima_vela != vela_cerrada:
-                desc, atr_val = generar_descripcion_nison(df)  # idx=-2 por defecto -> vela cerrada
+                desc, atr_val = generar_descripcion_nison(df)
                 print(f"--- Evaluando Matriz de Vela: {vela_cerrada.strftime('%H:%M')} ---")
                 
-                decision, razones, patron, multis = analizar_con_groq_texto(desc, atr_val, REGLAS_APRENDIDAS)
-                ULTIMA_DECISION, ULTIMO_MOTIVO = decision, razones[0] if razones else "Sin razones"
-                
-                # MEJORA: Detectar mercado extremadamente comprimido (rango muy estrecho) y forzar Hold
-                if es_rango_estrecho(df, sop, res, atr, tend):
+                # MEJORA: Antes de consultar a la IA, verificar si hay consolidación estrecha local
+                if es_consolidacion_estrecha(df, atr):
                     decision = "Hold"
-                    razones = ["Mercado extremadamente lateral/comprimido. Sin margen para operar. Esperar expansión."]
-                    ULTIMO_MOTIVO = razones[0]
-                    print(f"⏸️ RANGO ESTRECHO detectado: {res - sop:.2f} USD (ATR={atr:.2f}). Forzando Hold.")
-                    telegram_mensaje(f"⚠️ RANGO EXTREMADAMENTE ESTRECHO: Soporte={sop:.2f} Resistencia={res:.2f} (Ancho={res-sop:.2f} < 1.5*ATR). Operaciones desactivadas hasta que haya expansión.")
+                    razones = ["Consolidación extremadamente estrecha (rango local < 1.2 ATR y precio pegado a EMA20). No hay margen para operar. Esperar expansión."]
+                    patron = ""
+                    multis = (DEFAULT_SL_MULT, DEFAULT_TP1_MULT, DEFAULT_TRAILING_MULT)
+                    ULTIMA_DECISION, ULTIMO_MOTIVO = decision, razones[0]
+                    print(f"⏸️ {ULTIMO_MOTIVO}")
+                    telegram_mensaje(f"⚠️ CONSOLIDACIÓN ESTRECHA: Rango últimas 10 velas = {df['high'].iloc[-10:].max() - df['low'].iloc[-10:].min():.2f} USD (ATR={atr:.2f}). Hold forzado.")
+                else:
+                    decision, razones, patron, multis = analizar_con_groq_texto(desc, atr_val, REGLAS_APRENDIDAS)
+                    ULTIMA_DECISION, ULTIMO_MOTIVO = decision, razones[0] if razones else "Sin razones"
                 
                 if decision in ["Buy","Sell"] and risk_management_check():
                     paper_abrir_posicion(decision, precio, atr_val, razones, patron, multis, df, sop, res, slo, inter)
@@ -566,7 +574,6 @@ def run_bot():
                 
                 ultima_vela = vela_cerrada
             
-            # Revisión de Trades Activos
             if PAPER_ACTIVE_TRADES:
                 sop, res, slo, inter, _, _ = detectar_zonas_mercado(df, -1)
                 paper_revisar_sl_tp(df, sop, res, slo, inter)

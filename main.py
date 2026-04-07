@@ -12,7 +12,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 if not GROQ_API_KEY:
     raise ValueError("Falta GROQ_API_KEY")
 client = Groq(api_key=GROQ_API_KEY)
-MODELO_TEXTO = "openai/gpt-oss-120b"   # ← se mantiene tu modelo
+MODELO_TEXTO = "llama-3.1-8b-instant"   # ← CAMBIADO a Llama 3.1 8B
 
 # ====== MEJORAS IA (MEMORIA + JSON ROBUSTO) ======
 MEMORY_FILE = "memoria_bot.json"
